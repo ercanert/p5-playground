@@ -5,7 +5,7 @@
 
 const BRUSHES = [
   ['score', 'Score Brush'],
-  ['schematic', 'Schematic Brush'],
+  ['schematic', 'Cezeri Mechanisms'],
   ['balloon', 'Balloon Brush'],
 ];
 

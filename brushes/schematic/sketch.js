@@ -1,10 +1,8 @@
-// Schematic Brush
-// A p5.js brush that draws randomized technical schematics along each stroke:
-// modular-synth patch diagrams (crosshair pins, rounded modules, sweeping
-// patch cables) and CAD site-plan drafting (dimension lines with ticks,
-// callout bubbles on leaders, nested contours, hatching, section markers).
-// Every annotation is a random number in a monospace face, placed clear of
-// the numbers and node bodies already on the page. White page, black ink.
+// Cezeri Mechanisms Brush
+// A p5.js brush inspired by the water machines, clocks and automata described
+// by al-Jazari at the Artuqid court. It does not reproduce manuscript pages;
+// it composes a new, living vocabulary of vessels, water wheels, gears,
+// pulleys, pumps and celestial-clock faces along each stroke.
 //
 // Nodes are snapped to an invisible grid at intervals along the stroke and
 // wired to the previous node. Everything is recorded as primitives (ink runs,
@@ -18,6 +16,11 @@ const FONT = 'Menlo, Consolas, "Courier New", monospace';
 const PEN_SPEED = 0.7;   // px per ms the pen travels
 const CHAR_MS = 22;      // ms per typed character
 const W = { heavy: 2.3, reg: 1.25, cable: 1.0, thin: 0.7 }; // line weights (px) at size 1
+const PARCHMENT = '#e8d8ad';
+const C = {
+  // Aged walnut ink with deliberately restrained mineral-pigment accents.
+  ink: '#302018', water: '#355f62', copper: '#624321', gold: '#86652b', red: '#71372a',
+};
 
 // Ink character. Runs are resampled and wobbled once when recorded, so the
 // rough edges are stable from frame to frame.
@@ -25,28 +28,29 @@ const INK = {
   step: 2.5,      // px between resampled points along a run
   wobble: 0,      // px the line itself may wander sideways (0 keeps lines true)
   rag: 1.3,       // px of raggedness on blot outlines
-  bleed: 3.8,     // how far ink wicks out, as a multiple of the line weight
-  bleedAlpha: 40, // alpha of the innermost bleed layer
-  fiber: 0.22,    // chance per segment of a fine fiber wicking sideways
-  grain: 0.45,    // chance per segment of a grain of ink caught in the paper
-  body: 245,      // alpha of the line itself
-  pool: 0.85,     // chance a run pools ink where the pen lands and lifts
-  blob: 0.45,     // chance a long run carries pooled blobs along its length
-  drip: 0.35,     // chance a pooled blob runs into a drip
-  speck: 0.7,     // chance a stamp throws specks
+  bleed: 2.6,     // how far ink wicks out, as a multiple of the line weight
+  bleedAlpha: 34, // alpha of the innermost bleed layer
+  fiber: 0.3,     // chance per segment of a fine fiber wicking sideways
+  grain: 0.58,    // chance per segment of a grain of ink caught in the paper
+  body: 232,      // alpha of the line itself
+  pool: 0.7,      // chance a run pools ink where the pen lands and lifts
+  blob: 0.3,      // chance a long run carries pooled blobs along its length
+  drip: 0.18,     // chance a pooled blob runs into a drip
+  speck: 0.48,    // chance a stamp throws specks
 };
 
-// node kinds and how often each is chosen, per drafting style
-const PATCH_NODES = [['pin', 8], ['module', 5], ['stack', 2], ['hub', 2], ['terminal', 3]];
-const CAD_NODES   = [['bubble', 6], ['rings', 3], ['section', 2], ['terminal', 3], ['module', 2], ['pin', 2]];
-const STYLES = ['patch', 'cad', 'mixed'];
+// The two sets bias each stroke toward water-driven devices or timekeeping
+// devices. Mixed draws from both, rather than switching into modern CAD.
+const WATER_NODES = [['vessel', 5], ['waterwheel', 4], ['pump', 4], ['gear', 3], ['pulley', 2]];
+const CLOCK_NODES = [['clock', 5], ['gear', 5], ['pulley', 3], ['vessel', 2], ['automaton', 1]];
+const STYLES = ['water', 'clock', 'mixed'];
 
 const BRUSH = {
-  name: 'Schematic Brush',
+  name: 'Cezeri Mechanisms',
   swatch: false,
   help: [
-    ['drag', 'draft nodes, wiring and annotations along the stroke'],
-    ['1 2 3 / 0', 'patch, cad, mixed / random style'],
+    ['drag', 'draw water machines, clocks and mechanisms'],
+    ['1 2 3 / 0', 'water, clock, mixed / random style'],
     ['[ ]', 'brush size   - = density   m mirror'],
     ['space', 'auto-fill page   e eraser'],
     ['c', 'clear   r new grid module'],
@@ -55,6 +59,7 @@ const BRUSH = {
 };
 
 let paint;              // finished marks
+let paper;              // fixed parchment grain behind the marks
 let u = 12;             // grid module (the unit everything is built from)
 let bs = 1;             // brush size multiplier
 let density = 1;        // nodes per unit of drag distance
@@ -72,8 +77,9 @@ function setup() {
   createCanvas(windowWidth, windowHeight);
   textFont(FONT);
   paint = makeLayer();
+  paper = makePaper();
   // index.html?auto starts with a page that drafts itself; add
-  // &style=patch|cad|mixed and &mirror to preset the brush
+  // &style=water|clock|mixed and &mirror to preset the brush
   const params = new URLSearchParams(location.search);
   if (STYLES.includes(params.get('style'))) styleLock = params.get('style');
   if (params.has('mirror')) mirror = true;
@@ -90,10 +96,50 @@ function makeLayer() {
   return g;
 }
 
+function makePaper() {
+  const g = createGraphics(width, height);
+  g.background('#d4bb80');
+  g.noStroke();
+  // Overlapping soft washes, made of nested irregular ellipses rather than a
+  // tiled grid, give the sheet broad age variation without visible pixels.
+  for (let i = 0; i < 48; i++) {
+    const x = random(-width * 0.15, width * 1.15);
+    const y = random(-height * 0.15, height * 1.15);
+    const w = random(width * 0.1, width * 0.42);
+    const h = random(height * 0.06, height * 0.28);
+    for (let ring = 0; ring < 7; ring++) {
+      const dark = random() < 0.68;
+      g.fill(dark ? 103 : 248, dark ? random(1.5, 5) : random(1, 3));
+      g.ellipse(x + random(-w * 0.05, w * 0.05), y + random(-h * 0.08, h * 0.08), w * (1 - ring * 0.1), h * (1 - ring * 0.1));
+    }
+  }
+  // Non-uniform mottling at several scales; circles keep the grain organic.
+  for (let i = 0; i < width * height / 340; i++) {
+    const dark = random() < 0.58;
+    g.fill(dark ? 90 : 255, dark ? random(2, 10) : random(2, 8));
+    g.ellipse(random(width), random(height), random(1, 14), random(1, 9));
+  }
+  // Directional fibres and fine inclusions in the pulp.
+  for (let i = 0; i < width * height / 1100; i++) {
+    const x = random(width), y = random(height);
+    g.stroke(95, 68, 37, random(4, 15));
+    g.strokeWeight(random(0.2, 0.65));
+    g.line(x, y, x + random(6, 30), y + random(-1.3, 1.3));
+  }
+  g.noStroke();
+  for (let i = 0; i < width * height / 440; i++) {
+    const dark = random() < 0.58;
+    g.fill(dark ? 72 : 255, dark ? random(6, 25) : random(5, 17));
+    g.circle(random(width), random(height), random(0.25, 1.8));
+  }
+  return g;
+}
+
 function windowResized() {
   const old = paint;
   resizeCanvas(windowWidth, windowHeight);
   paint = makeLayer();
+  paper = makePaper();
   paint.image(old, 0, 0);
 }
 
@@ -109,7 +155,7 @@ function draw() {
   }
   active = keep;
 
-  background(255);
+  image(paper, 0, 0);
   image(paint, 0, 0);
   for (const s of active) renderStamp(s, window, now);
   drawBrushCursor();
@@ -158,7 +204,7 @@ function endStroke() {
   st = null;
 }
 
-function isCad(mode) { return mode === 'cad' || (mode === 'mixed' && random() < 0.5); }
+function isCad(mode) { return mode === 'clock' || (mode === 'mixed' && random() < 0.5); }
 
 function mousePressed(e) {
   if (!onCanvas(e) || mouseY < 0 || mouseY > height) return;
@@ -175,14 +221,14 @@ function mouseReleased() { if (st) st.pressed = false; }
 function placeNode(x, y) {
   const prev = st.nodes[st.nodes.length - 1] || null;
   if (prev && dist(prev.x, prev.y, x, y) < u * 2.5 * bs) return;
-  const cad = isCad(st.mode);
-  const n = makeNode(x, y, cad);
+  const clock = isCad(st.mode);
+  const n = makeNode(x, y, clock);
   rec = [];
   claim([x - n.rx, y - n.ry, x + n.rx, y + n.ry]);
-  if (prev) connect(prev, n, cad);
+  if (prev) connect(prev, n, clock);
   drawNode(n);
-  if (random() < 0.85) label(n, cad);
-  decorate(n, prev, cad);
+  if (random() < 0.85) label(n);
+  decorate(n, prev, clock);
   st.nodes.push(n);
   commit(rec);
 }
@@ -253,15 +299,12 @@ function renderStamp(s, g, now) {
 
 // Ink runs revealed up to a pen-travel budget of q * total length.
 function drawInk(g, p, q) {
-  if (q >= 1 && p.fill && p.poly) {
-    g.noStroke();
-    g.fill(p.fill);
-    polyShape(g, p.poly, true);
-  }
+  // Closed mechanisms remain transparent: gears, wheels and vessels read as
+  // inked outlines on the parchment, never as cream-filled vector shapes.
   let budget = q >= 1 ? Infinity : q * p.len;
   for (const r of p.runs) {
-    if (budget >= r.len) { drawRun(g, r, r.pts, p.w, true); budget -= r.len; }
-    else { drawRun(g, r, cutRun(r.pts, budget), p.w, false); break; }
+    if (budget >= r.len) { drawRun(g, r, r.pts, p.w, true, p.col || C.ink); budget -= r.len; }
+    else { drawRun(g, r, cutRun(r.pts, budget), p.w, false, p.col || C.ink); break; }
   }
 }
 
@@ -273,21 +316,21 @@ function polyShape(g, pts, closed) {
 
 // One run of wet ink: a soft bleed under a line whose weight wanders along
 // its length, with pooled ink where the pen landed (and lifted, once done).
-function drawRun(g, run, pts, w, complete) {
+function drawRun(g, run, pts, w, complete, col) {
   if (pts.length < 2) return;
   g.noFill();
-  bleedRun(g, run, pts, w);
-  g.stroke(0, INK.body);
+  bleedRun(g, run, pts, w, col);
+  g.stroke(pigment(col, INK.body));
   for (let i = 1; i < pts.length; i++) {
     g.strokeWeight(w * (0.5 + 1.2 * noise(run.seed + i * 0.2)));
     g.line(pts[i - 1][0], pts[i - 1][1], pts[i][0], pts[i][1]);
   }
   g.noStroke();
   if (run.pool) {
-    poolBleed(g, run.seed + 7, pts[0][0], pts[0][1], w * 3);
-    if (complete) poolBleed(g, run.seed + 11, pts[pts.length - 1][0], pts[pts.length - 1][1], w * 2.5);
+    poolBleed(g, run.seed + 7, pts[0][0], pts[0][1], w * 3, col);
+    if (complete) poolBleed(g, run.seed + 11, pts[pts.length - 1][0], pts[pts.length - 1][1], w * 2.5, col);
   }
-  g.fill(0, 225);
+  g.fill(pigment(col, 225));
   if (run.pool) {
     g.circle(pts[0][0], pts[0][1], w * 3);
     if (complete) g.circle(pts[pts.length - 1][0], pts[pts.length - 1][1], w * 2.5);
@@ -299,7 +342,7 @@ function drawRun(g, run, pts, w, complete) {
     g.circle(x, y, w * size);
     if (drip > 0) {
       // ink running down the page from the blob, thinning to a bead
-      g.stroke(0, 210);
+      g.stroke(pigment(col, 210));
       g.strokeWeight(w * 1.1);
       g.line(x, y, x, y + drip * 0.7);
       g.strokeWeight(w * 0.6);
@@ -314,13 +357,13 @@ function drawRun(g, run, pts, w, complete) {
 // the run (heavier where the pen dwelt), fading outward, plus fine fibers
 // where the ink follows the grain sideways. All driven by noise on the run's
 // seed so it is identical from frame to frame.
-function bleedRun(g, run, pts, w) {
+function bleedRun(g, run, pts, w, col) {
   const reach = w * INK.bleed;
   // soft layers, fading outward; reach varies slowly and also flickers
   // segment to segment so the edge is uneven rather than a smooth glow
   const layers = [[1, 0.16], [0.6, 0.38], [0.33, 1]];
   for (const [mult, af] of layers) {
-    g.stroke(0, INK.bleedAlpha * af);
+    g.stroke(pigment(col, INK.bleedAlpha * af));
     for (let i = 1; i < pts.length; i++) {
       const slow = pow(noise(run.seed + 40 + i * 0.11), 1.7);
       const fast = noise(run.seed + 60 + i * 0.55);
@@ -339,7 +382,7 @@ function bleedRun(g, run, pts, w) {
     if (noise(run.seed + 90 + i * 2.3) > 1 - INK.fiber) {
       const side = noise(run.seed + 130 + i * 1.3) < 0.5 ? -1 : 1;
       const len = reach * (0.3 + 1.2 * noise(run.seed + 170 + i * 0.9));
-      g.stroke(0, 35 + 50 * noise(run.seed + 210 + i * 0.7));
+      g.stroke(pigment(col, 35 + 50 * noise(run.seed + 210 + i * 0.7)));
       g.strokeWeight(max(0.35, w * 0.3));
       g.line(b[0], b[1], b[0] + nx * side * len, b[1] + ny * side * len);
     }
@@ -348,7 +391,7 @@ function bleedRun(g, run, pts, w) {
       const off = w * 0.6 + reach * 0.9 * noise(run.seed + 330 + i * 1.1);
       const r = 0.25 + 0.55 * noise(run.seed + 370 + i * 0.8);
       g.noStroke();
-      g.fill(0, 40 + 90 * noise(run.seed + 410 + i * 0.6));
+      g.fill(pigment(col, 40 + 90 * noise(run.seed + 410 + i * 0.6)));
       g.circle(b[0] + nx * side * off, b[1] + ny * side * off, r * 2 * sqrt(bs));
     }
   }
@@ -357,16 +400,25 @@ function bleedRun(g, run, pts, w) {
 
 // Lobed bleed around a pool of ink: a soft disc with a few offset lobes
 // where the paper drank more on one side.
-function poolBleed(g, seed, x, y, d) {
+function poolBleed(g, seed, x, y, d, col = C.ink) {
   g.noStroke();
-  g.fill(0, 18);
+  g.fill(pigment(col, 18));
   g.circle(x, y, d * 2.2);
   for (let k = 0; k < 3; k++) {
     const a = noise(seed + k * 3.1) * TWO_PI * 2;
     const r = d * (0.3 + 0.5 * noise(seed + 50 + k * 2.7));
-    g.fill(0, 14 + 12 * noise(seed + 80 + k));
+    g.fill(pigment(col, 14 + 12 * noise(seed + 80 + k)));
     g.circle(x + cos(a) * r, y + sin(a) * r, d * (0.9 + 0.8 * noise(seed + 110 + k * 1.9)));
   }
+}
+
+// p5 1.9 rejects `stroke('#hex', alpha)`, but accepts one CSS rgba string.
+function pigment(col, alpha) {
+  const hex = col.startsWith('#') ? col.slice(1) : '302018';
+  const r = parseInt(hex.slice(0, 2), 16);
+  const g = parseInt(hex.slice(2, 4), 16);
+  const b = parseInt(hex.slice(4, 6), 16);
+  return `rgba(${r}, ${g}, ${b}, ${constrain(alpha / 255, 0, 1)})`;
 }
 
 // The first `budget` px of a polyline.
@@ -466,13 +518,13 @@ function refNum() { return `${floor(random(1, 5))}.${floor(random(1, 5))}`; }
 
 // A polyline of ink. `dash` = [on, off] splits it into runs; `fill` marks a
 // closed shape that is filled once its outline is complete.
-function ink(pts, w, dash = null, fill = null) {
+function ink(pts, w, dash = null, fill = null, col = C.ink) {
   if (pts.length < 2) return;
   const runs = dash ? dashRuns(pts, dash) : [mkRun(pts)];
   let len = 0;
   for (const r of runs) len += r.len;
   if (len <= 0) return;
-  rec.push({ k: 'ink', runs, w, len, fill, poly: fill ? pts : null });
+  rec.push({ k: 'ink', runs, w, len, fill, col, poly: fill ? pts : null });
 }
 
 function mkRun(raw) {
@@ -551,14 +603,14 @@ function dashRuns(pts, dash) {
   return runs;
 }
 
-function circ(cx, cy, r, w, dash = null, fill = null, a0 = 0, a1 = TWO_PI) {
+function circ(cx, cy, r, w, dash = null, fill = null, col = C.ink, a0 = 0, a1 = TWO_PI) {
   const n = max(12, floor(r * abs(a1 - a0) / 3));
   const pts = [];
   for (let i = 0; i <= n; i++) {
     const a = lerp(a0, a1, i / n);
     pts.push([cx + cos(a) * r, cy + sin(a) * r]);
   }
-  ink(pts, w, dash, fill);
+  ink(pts, w, dash, fill, col);
 }
 
 function rrectPts(x, y, w, h, rad) {
@@ -574,7 +626,7 @@ function rrectPts(x, y, w, h, rad) {
   pts.push(pts[0]);
   return pts;
 }
-function rrect(x, y, w, h, rad, wgt, dash = null, fill = null) { ink(rrectPts(x, y, w, h, rad), wgt, dash, fill); }
+function rrect(x, y, w, h, rad, wgt, dash = null, fill = null, col = C.ink) { ink(rrectPts(x, y, w, h, rad), wgt, dash, fill, col); }
 
 // A number that must land clear of everything placed so far: the box is
 // nudged through a few nearby positions and the number is dropped if none
@@ -653,35 +705,115 @@ function bezierPts(x1, y1, cx1, cy1, cx2, cy2, x2, y2, n = 40) {
 
 // ---------------------------------------------------------------- nodes
 
-function makeNode(x, y, cad) {
-  const kind = weightedPick(cad ? CAD_NODES : PATCH_NODES);
+function makeNode(x, y, clock) {
+  const kind = weightedPick(clock ? CLOCK_NODES : WATER_NODES);
   const n = { x, y, kind, r: u * random(0.8, 1.2) * bs };
-  if (kind === 'module') { n.rx = u * random(1.8, 2.6) * bs; n.ry = u * random(1, 1.5) * bs; }
-  else if (kind === 'stack') {
-    n.cells = floor(random(2, 5));
-    n.rx = u * 1.8 * bs;
-    n.ry = (n.cells * u * 1.7 * bs + (n.cells - 1) * u * 0.25 * bs) / 2;
-  }
-  else if (kind === 'hub') n.r = u * random(1.5, 2) * bs;
-  else if (kind === 'bubble') n.r = u * 1.15 * bs;
-  else if (kind === 'section') { n.rx = n.r * 1.9; n.ry = n.r * 1.45; }
-  else if (kind === 'terminal') n.r = u * 0.55 * bs;
-  else if (kind === 'rings') n.r = u * random(1.6, 2.6) * bs;
+  if (kind === 'waterwheel' || kind === 'clock') n.r = u * random(2.0, 3.1) * bs;
+  else if (kind === 'gear') n.r = u * random(1.25, 2.0) * bs;
+  else if (kind === 'pulley') n.r = u * random(1.0, 1.55) * bs;
+  else if (kind === 'pump') { n.rx = u * random(2.6, 3.5) * bs; n.ry = u * random(1.4, 2.1) * bs; }
+  else if (kind === 'vessel') { n.rx = u * random(1.0, 1.5) * bs; n.ry = u * random(1.7, 2.5) * bs; }
+  else if (kind === 'automaton') { n.rx = u * 1.6 * bs; n.ry = u * 2.4 * bs; }
   if (n.rx === undefined) { n.rx = n.r; n.ry = n.r; }
   return n;
 }
 
 function drawNode(n) {
   switch (n.kind) {
-    case 'pin':      nodePin(n); break;
-    case 'module':   cell(n.x - n.rx, n.y - n.ry, n.rx * 2, n.ry * 2); break;
-    case 'stack':    nodeStack(n); break;
-    case 'hub':      nodeHub(n); break;
-    case 'terminal': nodeTerminal(n); break;
-    case 'bubble':   nodeBubble(n); break;
-    case 'section':  nodeSection(n); break;
-    case 'rings':    nodeRings(n); break;
+    case 'waterwheel': nodeWaterwheel(n); break;
+    case 'clock':      nodeClock(n); break;
+    case 'gear':       nodeGear(n); break;
+    case 'pulley':     nodePulley(n); break;
+    case 'pump':       nodePump(n); break;
+    case 'vessel':     nodeVessel(n); break;
+    case 'automaton':  nodeAutomaton(n); break;
   }
+}
+
+function nodeWaterwheel(n) {
+  const { x, y, r } = n;
+  circ(x, y, r, wt('reg'), null, PARCHMENT, C.copper);
+  circ(x, y, r * 0.16, wt('reg'), null, C.gold, C.copper);
+  for (let i = 0; i < 12; i++) {
+    const a = i * TWO_PI / 12;
+    ink([[x + cos(a) * r * 0.18, y + sin(a) * r * 0.18], [x + cos(a) * r * 0.94, y + sin(a) * r * 0.94]], wt('thin'), null, null, C.copper);
+    const bx = x + cos(a) * r * 0.73, by = y + sin(a) * r * 0.73;
+    circ(bx, by, r * 0.16, wt('thin'), null, PARCHMENT, C.copper);
+  }
+  waterArc(x, y, r * 1.22, random() < 0.5 ? -1 : 1);
+}
+
+function nodeClock(n) {
+  const { x, y, r } = n;
+  circ(x, y, r, wt('heavy'), null, PARCHMENT, C.ink);
+  circ(x, y, r * 0.73, wt('thin'), null, null, C.gold);
+  for (let i = 0; i < 12; i++) {
+    const a = i * TWO_PI / 12 - HALF_PI;
+    ink([[x + cos(a) * r * 0.77, y + sin(a) * r * 0.77], [x + cos(a) * r * 0.9, y + sin(a) * r * 0.9]], wt('thin'), null, null, C.gold);
+  }
+  const hand = random(TWO_PI);
+  ink([[x, y], [x + cos(hand) * r * 0.58, y + sin(hand) * r * 0.58]], wt('reg'), null, null, C.red);
+  dotBlot(x, y, r * 0.1);
+}
+
+function nodeGear(n) {
+  const { x, y, r } = n, teeth = floor(random(10, 16));
+  const pts = [];
+  for (let i = 0; i <= teeth * 2; i++) {
+    const a = i * PI / teeth;
+    const rr = i % 2 ? r * 0.82 : r;
+    pts.push([x + cos(a) * rr, y + sin(a) * rr]);
+  }
+  ink(pts, wt('reg'), null, PARCHMENT, C.copper);
+  circ(x, y, r * 0.48, wt('thin'), null, PARCHMENT, C.copper);
+  circ(x, y, r * 0.13, wt('reg'), null, C.gold, C.copper);
+}
+
+function nodePulley(n) {
+  const { x, y, r } = n;
+  circ(x, y, r, wt('reg'), null, PARCHMENT, C.copper);
+  circ(x, y, r * 0.38, wt('thin'), null, PARCHMENT, C.copper);
+  ink([[x - r * 1.5, y - r * 1.55], [x - r * 1.5, y + r * 2.8]], wt('thin'), null, null, C.ink);
+  ink([[x + r * 1.5, y - r * 1.55], [x + r * 1.5, y + r * 2.8]], wt('thin'), null, null, C.ink);
+  rrect(x + r * 0.9, y + r * 2.3, r * 1.2, r * 0.9, r * 0.12, wt('thin'), null, C.gold, C.copper);
+}
+
+function nodePump(n) {
+  const { x, y, rx, ry } = n;
+  rrect(x - rx, y - ry, rx * 2, ry * 2, u * 0.35 * bs, wt('reg'), PARCHMENT, C.ink);
+  const cy = y + ry * 0.15;
+  ink([[x - rx * 0.82, cy], [x + rx * 0.82, cy]], wt('reg'), null, null, C.copper);
+  for (const dx of [-0.55, 0, 0.55]) circ(x + dx * rx, cy, ry * 0.32, wt('thin'), null, PARCHMENT, C.copper);
+  const crank = x + rx * 0.62;
+  ink([[crank, cy], [crank + rx * 0.6, cy - ry * 0.72], [crank + rx * 1.05, cy - ry * 0.72]], wt('reg'), null, null, C.red);
+  circ(crank + rx * 1.08, cy - ry * 0.72, ry * 0.18, wt('thin'), null, C.gold, C.red);
+  waterArc(x - rx * 1.15, y, ry * 0.8, -1);
+}
+
+function nodeVessel(n) {
+  const { x, y, rx, ry } = n;
+  const pts = [[x - rx * 0.55, y - ry], [x + rx * 0.55, y - ry], [x + rx * 0.7, y - ry * 0.52], [x + rx, y + ry * 0.68], [x + rx * 0.55, y + ry], [x - rx * 0.55, y + ry], [x - rx, y + ry * 0.68], [x - rx * 0.7, y - ry * 0.52], [x - rx * 0.55, y - ry]];
+  ink(pts, wt('reg'), null, PARCHMENT, C.copper);
+  const level = y + random(-ry * 0.1, ry * 0.45);
+  ink([[x - rx * 0.85, level], [x + rx * 0.85, level]], wt('thin'), null, null, C.water);
+  for (let i = 0; i < 3; i++) ink([[x - rx * 0.55 + i * rx * 0.5, level], [x - rx * 0.3 + i * rx * 0.5, level + ry * 0.2]], wt('thin'), null, null, C.water);
+}
+
+function nodeAutomaton(n) {
+  const { x, y, rx, ry } = n;
+  circ(x, y - ry * 0.55, rx * 0.42, wt('reg'), null, PARCHMENT, C.ink);
+  ink([[x, y - ry * 0.13], [x, y + ry * 0.7]], wt('reg'), null, null, C.red);
+  ink([[x - rx, y + ry * 0.18], [x, y], [x + rx, y + ry * 0.18]], wt('thin'), null, null, C.ink);
+  rrect(x - rx * 0.7, y + ry * 0.7, rx * 1.4, ry * 0.38, rx * 0.1, wt('thin'), null, C.gold, C.copper);
+}
+
+function waterArc(x, y, r, dir) {
+  const pts = [];
+  for (let i = 0; i <= 18; i++) {
+    const a = lerp(-HALF_PI, HALF_PI, i / 18);
+    pts.push([x + cos(a) * r * dir, y + sin(a) * r]);
+  }
+  ink(pts, wt('thin'), [u * 0.45 * bs, u * 0.25 * bs], null, C.water);
 }
 
 // Circle with a small inner ring and crosshair ticks passing through it.
@@ -788,12 +920,35 @@ function nodeRings(n) {
 
 // ---------------------------------------------------------------- wiring
 
-function connect(a, b, cad) {
-  if (!cad) { cable(a, b, random() < 0.35 ? floor(random(2, 4)) : 1); return; }
+function connect(a, b, clock) {
   const r = random();
-  if (r < 0.55) orthoRoute(a, b);
-  else if (r < 0.8) ink([[a.x, a.y], [b.x, b.y]], wt('reg'), [u * 0.6 * bs, u * 0.3 * bs]);
-  else cable(a, b, 1);
+  if (!clock && r < 0.55) { waterChannel(a, b); return; }
+  if (r < 0.82) { rope(a, b); return; }
+  driveShaft(a, b);
+}
+
+function waterChannel(a, b) {
+  const dx = b.x - a.x, dy = b.y - a.y, L = sqrt(dx * dx + dy * dy) || 1;
+  const nx = -dy / L, ny = dx / L, off = u * 0.22 * bs;
+  const sag = u * random(1.5, 4) * bs * (random() < 0.5 ? -1 : 1);
+  const c1 = [a.x + dx * 0.28 + nx * sag, a.y + dy * 0.28 + ny * sag];
+  const c2 = [b.x - dx * 0.28 + nx * sag, b.y - dy * 0.28 + ny * sag];
+  for (const sign of [-1, 1]) {
+    ink(bezierPts(a.x + nx * off * sign, a.y + ny * off * sign, c1[0] + nx * off * sign, c1[1] + ny * off * sign, c2[0] + nx * off * sign, c2[1] + ny * off * sign, b.x + nx * off * sign, b.y + ny * off * sign, 32), wt('thin'), null, null, C.water);
+  }
+}
+
+function rope(a, b) {
+  const dx = b.x - a.x, dy = b.y - a.y;
+  const nx = -dy / (sqrt(dx * dx + dy * dy) || 1), ny = dx / (sqrt(dx * dx + dy * dy) || 1);
+  const sag = u * random(1.5, 4) * bs;
+  ink(bezierPts(a.x, a.y, a.x + dx * 0.3 + nx * sag, a.y + dy * 0.3 + ny * sag, b.x - dx * 0.3 + nx * sag, b.y - dy * 0.3 + ny * sag, b.x, b.y, 28), wt('thin'), [u * 0.25 * bs, u * 0.18 * bs], null, C.copper);
+}
+
+function driveShaft(a, b) {
+  ink([[a.x, a.y], [b.x, b.y]], wt('reg'), null, null, C.copper);
+  const mx = (a.x + b.x) / 2, my = (a.y + b.y) / 2;
+  circ(mx, my, u * 0.32 * bs, wt('thin'), null, C.gold, C.copper);
 }
 
 // Patch cable(s): a bezier that sweeps or sags between the two nodes.
@@ -832,43 +987,47 @@ function orthoRoute(a, b) {
 
 // ---------------------------------------------------------------- labels
 
-function label(n, cad) {
-  if (n.kind === 'bubble' || n.kind === 'section') return;
-  if (!cad) {
-    // a number beside the node, with a smaller one hung below it
-    const x = n.x + n.rx + u * 0.5 * bs;
-    const p = txt(num(), x, n.y - u * 0.2 * bs, fs(0.72), 'left', 'bottom');
-    if (p && random() < 0.8) txt(num(), p[0], p[1] + u * 0.4 * bs, fs(0.6), 'left', 'top');
-  } else {
-    // an underlined number above the node
-    const s = num();
-    const size = fs(0.62);
-    const p = txt(s, n.x, n.y - n.ry - u * 0.45 * bs, size, 'center', 'bottom');
-    if (!p) return;
-    const tw = measure(s, size);
-    ink([[p[0] - tw / 2, p[1] + u * 0.12 * bs], [p[0] + tw / 2, p[1] + u * 0.12 * bs]], wt('thin'));
-  }
+function label(n) {
+  // A non-linguistic folio mark avoids pretending to provide historical text.
+  const x = n.x + n.rx + u * 0.65 * bs, y = n.y - n.ry * 0.55;
+  rosette(x, y, u * 0.42 * bs);
 }
 
 // ---------------------------------------------------------------- decorations
 
-function decorate(n, prev, cad) {
-  if (cad) {
-    if (prev && random() < 0.45) dimension(prev, n);
-    if (random() < 0.35) callout(n);
-    if (random() < 0.2) contours(n);
-    if (random() < 0.15) hatch(n);
-    if (random() < 0.3) leaderNote(n);
-    if (random() < 0.1) numArrow(n);
-    if (random() < 0.12) axisLine(n, true);
-    if (!prev && random() < 0.5) callout(n);
-  } else {
-    if (st && st.nodes.length >= 2 && random() < 0.5) loopback(n);
-    if (random() < 0.08) chart(n);
-    if (random() < 0.12) axisLine(n, false);
-    if (random() < 0.2) ports(n);
-    if (!prev && random() < 0.5) ports(n);
+function decorate(n, prev, clock) {
+  if (random() < 0.42) rosette(n.x + random(-n.rx, n.rx), n.y + random(-n.ry, n.ry), u * random(0.28, 0.6) * bs);
+  if (!clock && random() < 0.35) flowMarks(n);
+  if (clock && random() < 0.3) celestialArc(n);
+  if (prev && random() < 0.2) hangingWeight(n);
+}
+
+function rosette(x, y, r) {
+  circ(x, y, r, wt('thin'), null, PARCHMENT, C.gold);
+  for (let i = 0; i < 8; i++) {
+    const a = i * TWO_PI / 8;
+    ink([[x, y], [x + cos(a) * r * 1.45, y + sin(a) * r * 1.45]], wt('thin'), null, null, C.gold);
   }
+  circ(x, y, r * 0.2, wt('thin'), null, C.red, C.gold);
+}
+
+function flowMarks(n) {
+  const y = n.y + n.ry + u * 0.55 * bs, x = n.x - n.rx;
+  for (let i = 0; i < 3; i++) {
+    const px = x + i * u * 1.15 * bs;
+    ink([[px, y], [px + u * 0.55 * bs, y], [px + u * 0.35 * bs, y - u * 0.2 * bs]], wt('thin'), null, null, C.water);
+  }
+}
+
+function celestialArc(n) {
+  const r = max(n.rx, n.ry) + u * 0.8 * bs;
+  circ(n.x, n.y, r, wt('thin'), [u * 0.35 * bs, u * 0.28 * bs], null, C.gold, -PI * 0.8, -PI * 0.15);
+}
+
+function hangingWeight(n) {
+  const x = n.x + n.rx + u * random(-0.3, 0.3) * bs, y = n.y + n.ry;
+  ink([[x, y], [x, y + u * 2.2 * bs]], wt('thin'), null, null, C.copper);
+  rrect(x - u * 0.32 * bs, y + u * 2.2 * bs, u * 0.64 * bs, u * 0.8 * bs, u * 0.08 * bs, wt('thin'), null, C.gold, C.copper);
 }
 
 // Dimension line offset from the pair, with extension lines, tick slashes
@@ -1105,8 +1264,8 @@ function clearAll() {
 }
 
 function keyPressed() {
-  if (key === '1') styleLock = 'patch';
-  else if (key === '2') styleLock = 'cad';
+  if (key === '1') styleLock = 'water';
+  else if (key === '2') styleLock = 'clock';
   else if (key === '3') styleLock = 'mixed';
   else if (key === '0') styleLock = null;
   else if (key === '[') bs = max(0.4, bs / 1.2);
