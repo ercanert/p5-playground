@@ -4,10 +4,16 @@ A small collection of p5.js drawing brushes sharing one page. Open
 `index.html` in a browser (p5.js loads from a CDN) and pick a brush from the
 menu in the top-left corner, or open `index.html?brush=<name>` directly.
 
+For deterministic Cezeri WebM rendering, install dependencies with `npm
+install`, then run `npm run dev` and press `v`. The resulting 1280x720, 24 fps
+test video is saved automatically under `renders/`. `npm run render:test`
+runs the same export headlessly; `npm run render:1080` renders the matching
+1920x1080 version.
+
 | Brush | Folder | What it draws |
 | --- | --- | --- |
 | Score Brush | [`brushes/score/`](brushes/score/README.md) | ribbons of staff lines with animated graphic-score snippets in five colours |
-| Cezeri Mechanisms | [`brushes/schematic/`](brushes/schematic/README.md) | transparent animated water machines, clocks, gears and vessels in an ink-first visual language inspired by al-Jazari |
+| Cezeri Mechanisms | [`brushes/schematic/`](brushes/schematic/README.md) | candle-lit water machines, clocks, gears and vessels on pure black, inspired by al-Jazari |
 | Balloon Brush | [`brushes/balloon/`](brushes/balloon/README.md) | a hidden poster of perfectly fitting airbrushed blobs in five spot colours, revealed blob by blob along each line you draw |
 
 Each brush's own README lists its keys. `?auto` on any brush starts with a

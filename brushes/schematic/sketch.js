@@ -21,9 +21,16 @@ const W = { heavy: 2.3, reg: 1.25, cable: 1.0, thin: 0.7 }; // line weights (px)
 // Kept as the fill argument for motif helpers; closed paths are not painted.
 const PARCHMENT = 'rgba(0, 0, 0, 0)';
 const C = {
-  // Carbon-black and iron-gall-like browns dominate; the former pigment
-  // categories survive only as very restrained, near-ink variations.
-  ink: '#261b17', water: '#302b27', copper: '#34251c', gold: '#483821', red: '#43241f',
+  // Ember-gold light on a void: colour changes only the shared renderer,
+  // never the mechanism geometry.
+  ink: '#fff1c9', water: '#ffdd8a', copper: '#f5c66b', gold: '#ffe7a8', red: '#e8b75d',
+};
+const FLAME = ['#fff7d8', '#ffedaf', '#ffdc86', '#f3c66c'];
+const MAX_IDLE_SPARKS = 96;
+const EXPORT_SCENE = { width: 1280, height: 720, fps: 24, drawMs: 10000, holdMs: 1000 };
+const EXPORT_PRESETS = {
+  '720p': { width: 1280, height: 720, bitrate: 6000000, filename: 'cezeri-rectangle-720p-24fps.webm' },
+  '1080p': { width: 1920, height: 1080, bitrate: 12000000, filename: 'cezeri-rectangle-1080p-persistent-sparks-24fps.webm' },
 };
 const EASTERN_DIGITS = '٠١٢٣٤٥٦٧٨٩';
 const CEZERI_LABELS = [
@@ -66,11 +73,14 @@ const BRUSH = {
     ['[ ]', 'brush size   - = density   m mirror'],
     ['space', 'auto-fill page   e eraser'],
     ['c', 'clear   r new grid module'],
-    ['s', 'save PNG   h hide this'],
+    ['s', 'save PNG   v / V render 720p / 1080p'],
+    ['h', 'hide this'],
   ],
 };
 
-let paint;              // finished marks; the main canvas stays transparent
+let paint;              // finished marks, under a live candlelight overlay
+let glowMask;           // cached line mask: never retraced during idle frames
+let flameLayer;         // one bounded full-canvas gradient compositing pass
 let u = 12;             // grid module (the unit everything is built from)
 let bs = 1;             // brush size multiplier
 let density = 1;        // nodes per unit of drag distance
@@ -80,15 +90,20 @@ let eraser = false;
 
 let st = null;          // current stroke state
 let active = [];        // stamps still being drawn in
+let sparkEmitters = []; // fixed-size pool sampled when stamps finish
 let autoDelay = 0;      // ms offset applied to everything created (auto-fill)
 let rec = null;         // primitive list being recorded
 let boxes = [];         // occupied rectangles [x0, y0, x1, y1]: numbers and node bodies
 let lastGeneratedKind = null;
+let recordingTimeOverride = null;
+let exportInProgress = false;
 
 function setup() {
   createCanvas(windowWidth, windowHeight);
   textFont(FONT);
   paint = makeLayer();
+  glowMask = makeEffectLayer();
+  flameLayer = makeEffectLayer();
   // index.html?auto starts with a page that drafts itself; add
   // &style=water|clock|mixed and &mirror to preset the brush
   const params = new URLSearchParams(location.search);
@@ -97,6 +112,9 @@ function setup() {
   buildHUD(BRUSH);
   updateHUD();
   if (params.has('auto')) autoFill();
+  const renderPreset = params.get('render');
+  if (renderPreset === 'test' || renderPreset === '720p') setTimeout(() => exportTestVideo('720p'), 250);
+  else if (renderPreset === '1080p') setTimeout(() => exportTestVideo('1080p'), 250);
 }
 
 function makeLayer() {
@@ -107,11 +125,23 @@ function makeLayer() {
   return g;
 }
 
+function makeEffectLayer(w = width, h = height) {
+  const g = createGraphics(w, h);
+  g.pixelDensity(1);
+  g.strokeCap(ROUND);
+  g.strokeJoin(ROUND);
+  return g;
+}
+
 function windowResized() {
   const old = paint;
   resizeCanvas(windowWidth, windowHeight);
   paint = makeLayer();
   paint.image(old, 0, 0);
+  const oldMask = glowMask;
+  glowMask = makeEffectLayer();
+  glowMask.image(oldMask, 0, 0);
+  flameLayer = makeEffectLayer();
 }
 
 function draw() {
@@ -121,13 +151,24 @@ function draw() {
   // bake finished stamps into the paint layer first, so nothing flickers
   const keep = [];
   for (const s of active) {
-    if (now >= s.t0 + s.end) renderStamp(s, paint, Infinity);
+    if (!s.sparkStarted && now >= s.t0) {
+      collectSparkEmitters(s, sparkEmitters);
+      s.sparkStarted = true;
+    }
+    if (now >= s.t0 + s.end) {
+      renderStamp(s, paint, Infinity);
+      bakeGlowMask(s, glowMask);
+    }
     else keep.push(s);
   }
   active = keep;
 
-  clear();
+  // Deliberately opaque black so the luminous marks can be captured as a
+  // complete night-sky image rather than composited over a paper texture.
+  background(0);
   image(paint, 0, 0);
+  drawFlameOverlay(window, glowMask, flameLayer, now);
+  drawIdleSparks(window, sparkEmitters, now);
   for (const s of active) renderStamp(s, window, now);
   drawBrushCursor();
 }
@@ -222,9 +263,13 @@ function commit(prims) {
     cursor += p.dur * 0.8;
     end = max(end, p.start + p.dur);
   }
-  const t0 = millis() + autoDelay;
-  active.push({ prims, t0, end });
-  if (mirror) active.push({ prims: mirrorPrims(prims), t0, end });
+  const t0 = (recordingTimeOverride === null ? millis() : recordingTimeOverride) + autoDelay;
+  const stamp = { prims, t0, end, flameSeed: random(1000) };
+  active.push(stamp);
+  if (mirror) {
+    const reflected = { prims: mirrorPrims(prims), t0, end, flameSeed: random(1000) };
+    active.push(reflected);
+  }
   rec = null;
 }
 
@@ -268,6 +313,105 @@ function renderStamp(s, g, now) {
   }
 }
 
+// Bake each completed path once into a cheap monochrome mask. Idle animation
+// then composites one gradient image, independent of the number of segments.
+function bakeGlowMask(s, mask) {
+  mask.push();
+  mask.noFill();
+  mask.stroke(255, 190);
+  for (const p of s.prims) {
+    if (p.k !== 'ink') continue;
+    mask.strokeWeight(max(1, p.w * 1.35));
+    for (const run of p.runs) polyShape(mask, run.pts, false);
+  }
+  mask.pop();
+}
+
+function drawFlameOverlay(g, mask, layer, now) {
+  if (!mask || !layer) return;
+  layer.clear();
+  const ctx = layer.drawingContext;
+  const shift = now * 0.00022;
+  const grad = ctx.createLinearGradient(0, 0, layer.width, layer.height * 0.35);
+  for (let i = 0; i <= 6; i++) grad.addColorStop(i / 6, flameColor(shift * FLAME.length + i * 0.72));
+  ctx.save();
+  ctx.globalAlpha = 0.34 + 0.06 * sin(now * 0.0021);
+  ctx.fillStyle = grad;
+  ctx.fillRect(0, 0, layer.width, layer.height);
+  ctx.globalCompositeOperation = 'destination-in';
+  ctx.drawImage(mask.elt, 0, 0, layer.width, layer.height);
+  ctx.restore();
+  g.push();
+  g.blendMode(ADD);
+  g.image(layer, 0, 0);
+  g.pop();
+}
+
+function collectSparkEmitters(s, emitters) {
+  const before = emitters.length;
+  for (const p of s.prims) {
+    if (p.k === 'speck') {
+      for (let i = 0; i < p.dots.length; i += 2) {
+        const d = p.dots[i];
+        emitters.push({ x: d[0], y: d[1], r: max(0.8, d[2]), phase: s.flameSeed + i * 0.61 });
+      }
+    } else if (p.k === 'ink') {
+      for (const run of p.runs) {
+        if (!run.pts.length || noise(run.seed * 0.17) < 0.48) continue;
+        const pt = run.pts[floor(run.pts.length * noise(run.seed * 0.31))];
+        emitters.push({ x: pt[0], y: pt[1], r: max(0.8, p.w), phase: run.seed });
+      }
+    }
+  }
+  // Every generated mechanism owns at least one perpetual emitter, even when
+  // its random ink and speck sampling did not select another suitable point.
+  if (emitters.length === before) {
+    const inkPrim = s.prims.find(p => p.k === 'ink' && p.runs.length && p.runs[0].pts.length);
+    if (inkPrim) {
+      const pts = inkPrim.runs[0].pts;
+      const pt = pts[floor(pts.length * 0.5)];
+      emitters.push({ x: pt[0], y: pt[1], r: max(0.8, inkPrim.w), phase: s.flameSeed });
+    }
+  }
+  if (emitters.length > MAX_IDLE_SPARKS) emitters.splice(0, emitters.length - MAX_IDLE_SPARKS);
+}
+
+function drawIdleSparks(g, emitters, now) {
+  const t = now * 0.001;
+  g.push();
+  g.blendMode(ADD);
+  g.noStroke();
+  g.drawingContext.shadowColor = pigment(C.gold, 210);
+  g.drawingContext.shadowBlur = 7;
+  for (const e of emitters) {
+    const cycle = (t * 0.32 + e.phase) % 1;
+    const pulse = 0.65 + 0.35 * sin(PI * cycle);
+    const x = e.x + sin(t * 1.7 + e.phase * 2.3) * 4 * pulse;
+    const y = e.y - cycle * 15 - cos(t * 1.2 + e.phase) * 2;
+    const col = flameColor(t * 0.55 + e.phase);
+    g.stroke(pigment(col, 42 + 55 * pulse));
+    g.strokeWeight(max(0.45, e.r * 0.35));
+    g.line(x, y + 2 + 4 * pulse, x, y);
+    g.noStroke();
+    g.fill(pigment(col, 125 + 130 * pulse));
+    g.circle(x, y, e.r * (0.7 + pulse));
+  }
+  g.drawingContext.shadowBlur = 0;
+  g.pop();
+}
+
+function flameColor(t) {
+  const x = ((t % FLAME.length) + FLAME.length) % FLAME.length;
+  const i = floor(x), q = x - i;
+  return mixHex(FLAME[i], FLAME[(i + 1) % FLAME.length], q);
+}
+
+function mixHex(a, b, t) {
+  const ca = a.slice(1), cb = b.slice(1);
+  const n = (offset) => round(lerp(parseInt(ca.slice(offset, offset + 2), 16), parseInt(cb.slice(offset, offset + 2), 16), t));
+  return `#${n(0).toString(16).padStart(2, '0')}${n(2).toString(16).padStart(2, '0')}${n(4).toString(16).padStart(2, '0')}`;
+}
+
 // Ink runs revealed up to a pen-travel budget of q * total length.
 function drawInk(g, p, q) {
   // Closed mechanisms remain transparent: gears, wheels and vessels read as
@@ -290,12 +434,17 @@ function polyShape(g, pts, closed) {
 function drawRun(g, run, pts, w, complete, col) {
   if (pts.length < 2) return;
   g.noFill();
+  // A candle-like halo follows the actual line segments. The points, paths
+  // and stroke weights stay unchanged; only emitted light is added.
+  g.drawingContext.shadowColor = pigment(col, 150);
+  g.drawingContext.shadowBlur = max(5, w * 6.5);
   bleedRun(g, run, pts, w, col);
   g.stroke(pigment(col, INK.body));
   for (let i = 1; i < pts.length; i++) {
     g.strokeWeight(w * (0.5 + 1.2 * noise(run.seed + i * 0.2)));
     g.line(pts[i - 1][0], pts[i - 1][1], pts[i][0], pts[i][1]);
   }
+  g.drawingContext.shadowBlur = 0;
   g.noStroke();
   if (run.pool) {
     poolBleed(g, run.seed + 7, pts[0][0], pts[0][1], w * 3, col);
@@ -373,6 +522,8 @@ function bleedRun(g, run, pts, w, col) {
 // where the paper drank more on one side.
 function poolBleed(g, seed, x, y, d, col = C.ink) {
   g.noStroke();
+  g.drawingContext.shadowColor = pigment(col, 150);
+  g.drawingContext.shadowBlur = d * 2.8;
   g.fill(pigment(col, 18));
   g.circle(x, y, d * 2.2);
   for (let k = 0; k < 3; k++) {
@@ -381,6 +532,7 @@ function poolBleed(g, seed, x, y, d, col = C.ink) {
     g.fill(pigment(col, 14 + 12 * noise(seed + 80 + k)));
     g.circle(x + cos(a) * r, y + sin(a) * r, d * (0.9 + 0.8 * noise(seed + 110 + k * 1.9)));
   }
+  g.drawingContext.shadowBlur = 0;
 }
 
 // p5 1.9 rejects `stroke('#hex', alpha)`, but accepts one CSS rgba string.
@@ -408,10 +560,16 @@ function cutRun(pts, budget) {
 function drawSpecks(g, p, q) {
   const sc = q >= 1 ? 1 : easeOutBack(q);
   g.noStroke();
-  for (const [x, y, r, a] of p.dots) {
-    g.fill(0, a);
+  g.drawingContext.shadowColor = pigment(C.gold, 255);
+  g.drawingContext.shadowBlur = 9 * sqrt(bs);
+  for (let i = 0; i < p.dots.length; i++) {
+    const [x, y, r, a] = p.dots[i];
+    // Deterministic alternation keeps finished sparks still rather than
+    // randomly changing colour every frame.
+    g.fill(pigment(i % 4 ? C.gold : C.copper, a));
     g.circle(x, y, r * 2 * sc);
   }
+  g.drawingContext.shadowBlur = 0;
 }
 
 // Text types itself out. Partial strings are drawn left-aligned from where
@@ -434,7 +592,22 @@ function drawText(g, p, q) {
   const part = p.arabic ? p.s : p.s.slice(0, n);
   if (p.arabic) g.drawingContext.direction = 'rtl';
   const tx = p.arabic ? 0 : x0;
+  // Arabic glyphs already have calligraphic stems at their native font size.
+  // A stroked outline made those stems much heavier than the drawn marks, so
+  // they use a single filled core with light emitted only through the shadow.
+  if (p.arabic) {
+    g.noStroke();
+    g.drawingContext.shadowColor = pigment(C.gold, 170);
+    g.drawingContext.shadowBlur = max(3, p.size * 0.24);
+    g.fill(pigment(C.ink, 242));
+    g.text(part, tx, 0);
+    g.drawingContext.shadowBlur = 0;
+    g.pop();
+    return;
+  }
   // ink wicking out from the figures: a fuzzy wide pass, then a crisp one
+  g.drawingContext.shadowColor = pigment(C.gold, 180);
+  g.drawingContext.shadowBlur = max(5, p.size * 0.45);
   g.fill(pigment(C.ink, 0));
   g.stroke(pigment(C.ink, 16));
   g.strokeWeight(max(0.8, p.size * 0.22));
@@ -443,12 +616,15 @@ function drawText(g, p, q) {
   g.strokeWeight(max(0.6, p.size * 0.1));
   g.fill(pigment(C.ink, 245));
   g.text(part, tx, 0);
+  g.drawingContext.shadowBlur = 0;
   g.pop();
 }
 
 function drawBlot(g, p, q) {
   const sc = q >= 1 ? 1 : easeOutBack(q);
-  g.stroke(0, 70);
+  g.drawingContext.shadowColor = pigment(p.col || C.copper, 190);
+  g.drawingContext.shadowBlur = 12 * sqrt(bs);
+  g.stroke(pigment(C.gold, 100));
   g.strokeWeight(2.2);
   g.fill(p.col);
   g.push();
@@ -458,6 +634,7 @@ function drawBlot(g, p, q) {
   for (const v of p.pts) g.vertex(v[0] - p.cx, v[1] - p.cy);
   g.endShape(CLOSE);
   g.pop();
+  g.drawingContext.shadowBlur = 0;
 }
 
 // ---------------------------------------------------------------- helpers
@@ -661,7 +838,7 @@ function claim(b) {
   if (mirror) boxes.push([width - b[2], b[1], width - b[0], b[3]]);
 }
 
-function blot(raw, col = '#000') {
+function blot(raw, col = C.copper) {
   let cx = 0, cy = 0;
   for (const p of raw) { cx += p[0]; cy += p[1]; }
   cx /= raw.length; cy /= raw.length;
@@ -1161,7 +1338,7 @@ function waterArc(x, y, r, dir) {
 // Circle with a small inner ring and crosshair ticks passing through it.
 function nodePin(n) {
   const { x, y, r } = n;
-  circ(x, y, r, wt('reg'), null, '#fff');
+  circ(x, y, r, wt('reg'), null, C.gold);
   circ(x, y, r * 0.42, wt('thin'));
   for (const [dx, dy] of [[1, 0], [-1, 0], [0, 1], [0, -1]]) {
     ink([[x + dx * r * 0.7, y + dy * r * 0.7], [x + dx * r * 1.45, y + dy * r * 1.45]], wt('thin'));
@@ -1171,7 +1348,7 @@ function nodePin(n) {
 
 // Rounded module box with some internal detail.
 function cell(x, y, w, h) {
-  rrect(x, y, w, h, u * 0.3 * bs, wt('reg'), null, '#fff');
+  rrect(x, y, w, h, u * 0.3 * bs, wt('reg'), null, C.gold);
   const cx = x + w / 2, cy = y + h / 2;
   const v = random();
   if (v < 0.4) {
@@ -1202,7 +1379,7 @@ function nodeStack(n) {
 // Large ring with an inner ring, centre dot, radial ticks and a partial outer arc.
 function nodeHub(n) {
   const { x, y, r } = n;
-  circ(x, y, r, wt('reg'), null, '#fff');
+  circ(x, y, r, wt('reg'), null, C.gold);
   circ(x, y, r * 0.62, wt('thin'));
   dotBlot(x, y, r * 0.12);
   for (const [dx, dy] of [[1, 0], [-1, 0], [0, 1], [0, -1]]) {
@@ -1216,10 +1393,10 @@ function nodeHub(n) {
 function nodeTerminal(n) {
   const { x, y, r } = n;
   if (random() < 0.5) {
-    ink([[x - r, y - r], [x + r, y - r], [x + r, y + r], [x - r, y + r], [x - r, y - r]], wt('reg'), null, '#fff');
+    ink([[x - r, y - r], [x + r, y - r], [x + r, y + r], [x - r, y + r], [x - r, y - r]], wt('reg'), null, C.gold);
     dotBlot(x, y, r * 0.3);
   } else {
-    circ(x, y, r, wt('reg'), null, '#fff');
+    circ(x, y, r, wt('reg'), null, C.gold);
     circ(x, y, r * 0.62, wt('thin'));
     dotBlot(x, y, r * 0.22);
   }
@@ -1228,7 +1405,7 @@ function nodeTerminal(n) {
 // Callout bubble: circle split by a bar, reference above and sheet below.
 function nodeBubble(n) {
   const { x, y, r } = n;
-  circ(x, y, r, wt('reg'), null, '#fff');
+  circ(x, y, r, wt('reg'), null, C.gold);
   ink([[x - r, y], [x + r, y]], wt('thin'));
   txtRaw(smallNum(), x, y - u * 0.1 * bs, fs(0.68), 'center', 'bottom');
   txtRaw(refNum(), x, y + u * 0.12 * bs, fs(0.55), 'center', 'top');
@@ -1238,7 +1415,7 @@ function nodeBubble(n) {
 function nodeSection(n) {
   // a rhombus wider than it is tall, so the figures sit inside its waist
   const { x, y } = n, sw = n.r * 1.9, sh = n.r * 1.45;
-  ink([[x, y - sh], [x + sw, y], [x, y + sh], [x - sw, y], [x, y - sh]], wt('reg'), null, '#fff');
+  ink([[x, y - sh], [x + sw, y], [x, y + sh], [x - sw, y], [x, y - sh]], wt('reg'), null, C.gold);
   ink([[x - sw, y], [x + sw, y]], wt('thin'));
   // each figure centred in its half, where the rhombus is still wide
   txtRaw(smallNum(), x, y - sh * 0.4, fs(0.5), 'center', 'center');
@@ -1449,7 +1626,7 @@ function callout(n) {
   const ang = atan2(n.y - cy, n.x - cx);
   ink([[n.x, n.y], [cx + cos(ang) * r, cy + sin(ang) * r]], wt('thin'));
   if (random() < 0.5) dotBlot(n.x, n.y, u * 0.12 * bs);
-  circ(cx, cy, r, wt('reg'), null, '#fff');
+  circ(cx, cy, r, wt('reg'), null, C.gold);
   ink([[cx - r, cy], [cx + r, cy]], wt('thin'));
   txtRaw(smallNum(), cx, cy - u * 0.1 * bs, fs(0.66), 'center', 'bottom');
   txtRaw(refNum(), cx, cy + u * 0.12 * bs, fs(0.52), 'center', 'top');
@@ -1547,7 +1724,7 @@ function axisLine(n, cad) {
   if (cad) nodeSection({ x: ex, y: ey, r: u * 0.85 * bs });
   else {
     const r = u * 0.4 * bs;
-    circ(ex, ey, r, wt('reg'), null, '#fff');
+    circ(ex, ey, r, wt('reg'), null, C.gold);
     ink([[ex - r * 1.8, ey], [ex + r * 1.8, ey]], wt('thin'));
     ink([[ex, ey - r * 1.8], [ex, ey + r * 1.8]], wt('thin'));
   }
@@ -1569,7 +1746,7 @@ function ports(n) {
   for (let i = 0; i < k; i++) {
     const y = snap(n.y + (i - (k - 1) / 2) * u * 1.2 * bs);
     ink([[n.x + side * n.rx, y], [x, y]], wt('thin'));
-    circ(x, y, u * 0.3 * bs, wt('reg'), null, '#fff');
+    circ(x, y, u * 0.3 * bs, wt('reg'), null, C.gold);
   }
 }
 
@@ -1595,6 +1772,197 @@ function chart(n) {
     ink(pts, wt('thin'));
   }
   txtRaw(num(), x0 + u * 0.2 * bs, y0 + h + u * 0.15 * bs, fs(0.55), 'left', 'top');
+}
+
+// ---------------------------------------------------------------- video export
+
+// Build the test with the real brush generator while temporarily isolating
+// its mutable drawing state from the interactive canvas.
+function buildRectangleTestScene() {
+  const saved = {
+    st, active, boxes, lastGeneratedKind, autoDelay, recordingTimeOverride,
+    u, bs, density, styleLock, mirror, eraser,
+  };
+  try {
+    randomSeed(240720);
+    noiseSeed(240720);
+    st = null;
+    active = [];
+    boxes = [];
+    lastGeneratedKind = null;
+    autoDelay = 0;
+    recordingTimeOverride = 0;
+    u = 12;
+    bs = 1;
+    density = 1;
+    styleLock = 'mixed';
+    mirror = false;
+    eraser = false;
+
+    const x0 = EXPORT_SCENE.width * 0.2, x1 = EXPORT_SCENE.width * 0.8;
+    const y0 = EXPORT_SCENE.height * 0.35, y1 = EXPORT_SCENE.height * 0.65;
+    const path = [[x0, y0], [x1, y0], [x1, y1], [x0, y1], [x0, y0]];
+    const perimeter = 2 * ((x1 - x0) + (y1 - y0));
+    let travelled = 0;
+    beginStroke(path[0][0], path[0][1]);
+    for (let side = 1; side < path.length; side++) {
+      const a = path[side - 1], b = path[side];
+      const length = dist(a[0], a[1], b[0], b[1]);
+      const steps = ceil(length / 4);
+      for (let i = 1; i <= steps; i++) {
+        recordingTimeOverride = ((travelled + length * i / steps) / perimeter) * 7600;
+        strokeTo(lerp(a[0], b[0], i / steps), lerp(a[1], b[1], i / steps));
+      }
+      travelled += length;
+    }
+    endStroke();
+    const scene = active;
+    const first = min(...scene.map(s => s.t0));
+    const last = max(...scene.map(s => s.t0 + s.end));
+    const scale = EXPORT_SCENE.drawMs / max(1, last - first);
+    for (const stamp of scene) {
+      stamp.t0 = (stamp.t0 - first) * scale;
+      stamp.end *= scale;
+      for (const p of stamp.prims) {
+        p.start *= scale;
+        p.dur *= scale;
+      }
+    }
+    return scene;
+  } finally {
+    ({ st, active, boxes, lastGeneratedKind, autoDelay, recordingTimeOverride,
+      u, bs, density, styleLock, mirror, eraser } = saved);
+  }
+}
+
+async function exportTestVideo(presetName = '720p') {
+  if (exportInProgress) return;
+  const preset = EXPORT_PRESETS[presetName] || EXPORT_PRESETS['720p'];
+  const renderScale = preset.width / EXPORT_SCENE.width;
+  exportInProgress = true;
+  const resumeInteractiveLoop = isLooping();
+  noLoop();
+  window.__CEZERI_EXPORT_STATE = 'rendering';
+  window.__CEZERI_EXPORT_RESULT = null;
+  const filename = preset.filename;
+  const totalFrames = round((EXPORT_SCENE.drawMs + EXPORT_SCENE.holdMs) / 1000 * EXPORT_SCENE.fps);
+  const frameDuration = round(1000000 / EXPORT_SCENE.fps);
+  let output, staticLayer, mask, effectLayer, encoder;
+  try {
+    if (!window.VideoEncoder || !window.VideoFrame || !window.WebMMuxer) {
+      throw new Error('WebM export requires a current Chrome or Edge browser with WebCodecs.');
+    }
+    setStatus(`preparing ${preset.width}x${preset.height} / ${EXPORT_SCENE.fps} fps test...`);
+    const scene = buildRectangleTestScene().sort((a, b) => a.t0 - b.t0);
+    output = makeEffectLayer(preset.width, preset.height);
+    staticLayer = makeEffectLayer(preset.width, preset.height);
+    mask = makeEffectLayer(preset.width, preset.height);
+    effectLayer = makeEffectLayer(preset.width, preset.height);
+    const emitters = [];
+    const baked = new Set();
+    const sparksStarted = new Set();
+
+    let config = {
+      codec: 'vp09.00.10.08', width: preset.width, height: preset.height,
+      bitrate: preset.bitrate, framerate: EXPORT_SCENE.fps, latencyMode: 'quality',
+    };
+    let muxCodec = 'V_VP9';
+    const support = await VideoEncoder.isConfigSupported(config);
+    if (!support.supported) {
+      config = { codec: 'vp8', width: preset.width, height: preset.height, bitrate: preset.bitrate, framerate: EXPORT_SCENE.fps };
+      muxCodec = 'V_VP8';
+    }
+    const muxer = new WebMMuxer({
+      target: 'buffer',
+      video: { codec: muxCodec, width: preset.width, height: preset.height, frameRate: EXPORT_SCENE.fps },
+    });
+    let encodeError = null;
+    let encodedChunks = 0;
+    encoder = new VideoEncoder({
+      output: (chunk, metadata) => {
+        encodedChunks++;
+        muxer.addVideoChunk(chunk, metadata);
+      },
+      error: error => { encodeError = error; },
+    });
+    encoder.configure(config);
+
+    for (let frameIndex = 0; frameIndex < totalFrames; frameIndex++) {
+      const frameMs = frameIndex * 1000 / EXPORT_SCENE.fps;
+      for (let i = 0; i < scene.length; i++) {
+        const stamp = scene[i];
+        if (!sparksStarted.has(i) && frameMs >= stamp.t0) {
+          collectSparkEmitters(stamp, emitters);
+          sparksStarted.add(i);
+        }
+        if (!baked.has(i) && frameMs + 0.001 >= stamp.t0 + stamp.end) {
+          staticLayer.push();
+          staticLayer.scale(renderScale);
+          renderStamp(stamp, staticLayer, Infinity);
+          staticLayer.pop();
+          mask.push();
+          mask.scale(renderScale);
+          bakeGlowMask(stamp, mask);
+          mask.pop();
+          baked.add(i);
+        }
+      }
+      output.background(0, 0, 0);
+      output.image(staticLayer, 0, 0);
+      drawFlameOverlay(output, mask, effectLayer, frameMs);
+      output.push();
+      output.scale(renderScale);
+      drawIdleSparks(output, emitters, frameMs);
+      for (let i = 0; i < scene.length; i++) {
+        const stamp = scene[i];
+        if (!baked.has(i) && frameMs >= stamp.t0) renderStamp(stamp, output, frameMs);
+      }
+      output.pop();
+
+      const frame = new VideoFrame(output.elt, {
+        timestamp: frameIndex * frameDuration,
+        duration: frameDuration,
+      });
+      encoder.encode(frame, { keyFrame: frameIndex % (EXPORT_SCENE.fps * 2) === 0 });
+      frame.close();
+      if (encodeError) throw encodeError;
+      if (frameIndex % 8 === 0) {
+        setStatus(`rendering WebM ${frameIndex + 1}/${totalFrames} frames...`);
+        if (frameIndex % EXPORT_SCENE.fps === 0) console.log(`WebM frame ${frameIndex + 1}/${totalFrames}`);
+        await new Promise(resolve => setTimeout(resolve, 0));
+      }
+    }
+    await encoder.flush();
+    if (encodeError) throw encodeError;
+    if (encodedChunks !== totalFrames) throw new Error(`Encoder returned ${encodedChunks}/${totalFrames} frames.`);
+    const buffer = muxer.finalize();
+    setStatus(`saving ${filename}...`);
+    const response = await fetch('/api/save-video', {
+      method: 'POST',
+      headers: { 'Content-Type': 'video/webm', 'X-Filename': filename },
+      body: buffer,
+    });
+    if (!response.ok) throw new Error(`Save failed: ${await response.text()}`);
+    const saved = await response.json();
+    window.__CEZERI_EXPORT_RESULT = {
+      ...saved, frames: encodedChunks, fps: EXPORT_SCENE.fps,
+      width: preset.width, height: preset.height,
+    };
+    window.__CEZERI_EXPORT_STATE = 'saved';
+    if (window.__onCezeriExportDone) window.__onCezeriExportDone(window.__CEZERI_EXPORT_RESULT);
+    setStatus(`saved ${totalFrames} frames: renders/${filename}`);
+  } catch (error) {
+    console.error(error);
+    window.__CEZERI_EXPORT_STATE = 'error';
+    window.__CEZERI_EXPORT_RESULT = { error: error.message };
+    if (window.__onCezeriExportDone) window.__onCezeriExportDone(window.__CEZERI_EXPORT_RESULT);
+    setStatus(`export failed: ${error.message}`);
+  } finally {
+    if (encoder && encoder.state !== 'closed') encoder.close();
+    for (const g of [output, staticLayer, mask, effectLayer]) if (g) g.remove();
+    exportInProgress = false;
+    if (resumeInteractiveLoop) loop();
+  }
 }
 
 // ---------------------------------------------------------------- auto fill
@@ -1637,7 +2005,10 @@ function autoFill() {
 
 function clearAll() {
   paint.clear();
+  glowMask.clear();
+  flameLayer.clear();
   active = [];
+  sparkEmitters = [];
   boxes = [];
   lastGeneratedKind = null;
 }
@@ -1657,6 +2028,8 @@ function keyPressed() {
   else if (key === 'c' || key === 'C') clearAll();
   else if (key === 'r' || key === 'R') { clearAll(); u = floor(random(9, 16)); }
   else if (key === 's' || key === 'S') saveCanvas('schematic-brush', 'png');
+  else if (key === 'v') { exportTestVideo('720p'); return false; }
+  else if (key === 'V') { exportTestVideo('1080p'); return false; }
   else if (key === 'h' || key === 'H') toggleHUD();
   updateHUD();
 }

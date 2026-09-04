@@ -1,0 +1,17 @@
+{
+  "name": "p5-playground",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Interactive p5 brushes with deterministic WebM export",
+  "scripts": {
+    "dev": "node scripts/dev-server.js",
+    "render:test": "node scripts/render-test.js",
+    "render:1080": "node scripts/render-test.js 1080p",
+    "video:inspect": "node scripts/inspect-video.js",
+    "video:inspect:1080": "node scripts/inspect-video.js 1080p"
+  },
+  "dependencies": {
+    "puppeteer-core": "25.10.0",
+    "webm-muxer": "1.2.1"
+  }
+}

@@ -11,8 +11,9 @@ clocks, palace gates, castle and candle clocks, musical boats, locks,
 chain-of-pots pumps, flute fountains, scribe clocks and occasional small
 automata.
 The mechanisms are joined by water channels, ropes and drive shafts, then
-drawn as transparent, animated dark-ink marks ready for compositing over a
-separate paper, wall, or projection texture.
+drawn as animated candle-fire marks over a pure-black background. Completed
+lines retain a softly moving gold gradient and a bounded set of drifting
+sparks suitable for projection.
 
 ## Run
 
@@ -38,14 +39,32 @@ Open `index.html?brush=schematic`, or use these presets:
 | `c` | clear everything |
 | `r` | clear and choose a new base scale |
 | `s` | save PNG |
+| `v` | render the deterministic 720p/24 fps rectangle test to `renders/` |
+| `Shift+v` | render the same composition natively at 1080p/24 fps |
+
+## Deterministic video export
+
+Run the project with `npm run dev`, then press `v` in the Cezeri brush to
+render and automatically save `renders/cezeri-rectangle-720p-24fps.webm`.
+The test contains 240 explicitly timestamped drawing frames over 10 seconds,
+followed by a 24-frame safe hold. It uses WebCodecs rather than recording the
+live screen, so a slow render cannot alter the video's 24 fps timing.
+
+For a completely automatic headless run, use `npm run render:test`. The test
+draws a centred horizontal rectangle that is 60% of the 1280x720 frame width.
+Use `npm run render:1080` for the matching 1920x1080 version.
+The current 1080p preset keeps rising sparks active from each mechanism's
+first drawing frame through the completed one-second hold.
 
 ## Art direction
 
 The primary controls are near the top of `sketch.js`:
 
 - `WATER_NODES` and `CLOCK_NODES` change which mechanical motifs appear.
-- `C` holds the near-black carbon and brown iron-gall-inspired ink palette.
-- `INK` controls the paper-wick, grains, pooled pigment, blobs and specks.
+- `C` and `FLAME` hold the ivory, wax-yellow and muted-gold fire palette.
+- `INK` controls the line texture, pooled light, blobs and initial sparks.
+- `glowMask` and `MAX_IDLE_SPARKS` bound the idle animation cost regardless
+  of how many source line segments have accumulated.
 - `nodeWaterwheel`, `nodePump`, `nodeVessel`, `nodeGear`, `nodeClock`,
   `nodeSiphon`, `nodeFountain`, `nodeValve`, `nodeAstrolabe` and
   `nodeBalance` define the individual motifs; `nodeCrownGear` and
