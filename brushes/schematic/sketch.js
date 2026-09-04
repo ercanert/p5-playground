@@ -13,14 +13,26 @@
 // Finished marks are baked into the paint layer.
 
 const FONT = 'Menlo, Consolas, "Courier New", monospace';
+const ARABIC_FONT = 'Geeza Pro, Noto Naskh Arabic, Amiri, serif';
+const ARABIC_NUMERAL_SCALE = 2;
 const PEN_SPEED = 0.7;   // px per ms the pen travels
 const CHAR_MS = 22;      // ms per typed character
 const W = { heavy: 2.3, reg: 1.25, cable: 1.0, thin: 0.7 }; // line weights (px) at size 1
-const PARCHMENT = '#e8d8ad';
+// Kept as the fill argument for motif helpers; closed paths are not painted.
+const PARCHMENT = 'rgba(0, 0, 0, 0)';
 const C = {
-  // Aged walnut ink with deliberately restrained mineral-pigment accents.
-  ink: '#302018', water: '#355f62', copper: '#624321', gold: '#86652b', red: '#71372a',
+  // Carbon-black and iron-gall-like browns dominate; the former pigment
+  // categories survive only as very restrained, near-ink variations.
+  ink: '#261b17', water: '#302b27', copper: '#34251c', gold: '#483821', red: '#43241f',
 };
+const EASTERN_DIGITS = '٠١٢٣٤٥٦٧٨٩';
+const CEZERI_LABELS = [
+  { ar: 'ماء', en: 'water' }, { ar: 'ساعة', en: 'clock or hour' },
+  { ar: 'إناء', en: 'vessel' }, { ar: 'حوض', en: 'basin' },
+  { ar: 'عجلة', en: 'wheel' }, { ar: 'سلسلة', en: 'chain' },
+  { ar: 'قفل', en: 'lock' }, { ar: 'باب', en: 'door' },
+  { ar: 'ميزان', en: 'balance' }, { ar: 'آلة', en: 'machine or instrument' },
+];
 
 // Ink character. Runs are resampled and wobbled once when recorded, so the
 // rough edges are stable from frame to frame.
@@ -41,8 +53,8 @@ const INK = {
 
 // The two sets bias each stroke toward water-driven devices or timekeeping
 // devices. Mixed draws from both, rather than switching into modern CAD.
-const WATER_NODES = [['vessel', 5], ['waterwheel', 4], ['pump', 4], ['gear', 3], ['pulley', 2]];
-const CLOCK_NODES = [['clock', 5], ['gear', 5], ['pulley', 3], ['vessel', 2], ['automaton', 1]];
+const WATER_NODES = [['vessel', 3], ['waterwheel', 2], ['pump', 2], ['gear', 2], ['crownGear', 2], ['gearTrain', 2], ['pulley', 2], ['siphon', 2], ['fountain', 2], ['valve', 2], ['ewer', 3], ['basin', 3], ['noria', 2], ['chainPump', 3], ['fluteFountain', 2]];
+const CLOCK_NODES = [['clock', 3], ['gear', 2], ['crownGear', 2], ['gearTrain', 2], ['pulley', 2], ['vessel', 2], ['automaton', 1], ['astrolabe', 2], ['balance', 2], ['valve', 1], ['peacock', 3], ['elephant', 2], ['gate', 2], ['castle', 2], ['candle', 3], ['musicBoat', 2], ['lock', 2], ['scribe', 2]];
 const STYLES = ['water', 'clock', 'mixed'];
 
 const BRUSH = {
@@ -58,8 +70,7 @@ const BRUSH = {
   ],
 };
 
-let paint;              // finished marks
-let paper;              // fixed parchment grain behind the marks
+let paint;              // finished marks; the main canvas stays transparent
 let u = 12;             // grid module (the unit everything is built from)
 let bs = 1;             // brush size multiplier
 let density = 1;        // nodes per unit of drag distance
@@ -72,12 +83,12 @@ let active = [];        // stamps still being drawn in
 let autoDelay = 0;      // ms offset applied to everything created (auto-fill)
 let rec = null;         // primitive list being recorded
 let boxes = [];         // occupied rectangles [x0, y0, x1, y1]: numbers and node bodies
+let lastGeneratedKind = null;
 
 function setup() {
   createCanvas(windowWidth, windowHeight);
   textFont(FONT);
   paint = makeLayer();
-  paper = makePaper();
   // index.html?auto starts with a page that drafts itself; add
   // &style=water|clock|mixed and &mirror to preset the brush
   const params = new URLSearchParams(location.search);
@@ -96,50 +107,10 @@ function makeLayer() {
   return g;
 }
 
-function makePaper() {
-  const g = createGraphics(width, height);
-  g.background('#d4bb80');
-  g.noStroke();
-  // Overlapping soft washes, made of nested irregular ellipses rather than a
-  // tiled grid, give the sheet broad age variation without visible pixels.
-  for (let i = 0; i < 48; i++) {
-    const x = random(-width * 0.15, width * 1.15);
-    const y = random(-height * 0.15, height * 1.15);
-    const w = random(width * 0.1, width * 0.42);
-    const h = random(height * 0.06, height * 0.28);
-    for (let ring = 0; ring < 7; ring++) {
-      const dark = random() < 0.68;
-      g.fill(dark ? 103 : 248, dark ? random(1.5, 5) : random(1, 3));
-      g.ellipse(x + random(-w * 0.05, w * 0.05), y + random(-h * 0.08, h * 0.08), w * (1 - ring * 0.1), h * (1 - ring * 0.1));
-    }
-  }
-  // Non-uniform mottling at several scales; circles keep the grain organic.
-  for (let i = 0; i < width * height / 340; i++) {
-    const dark = random() < 0.58;
-    g.fill(dark ? 90 : 255, dark ? random(2, 10) : random(2, 8));
-    g.ellipse(random(width), random(height), random(1, 14), random(1, 9));
-  }
-  // Directional fibres and fine inclusions in the pulp.
-  for (let i = 0; i < width * height / 1100; i++) {
-    const x = random(width), y = random(height);
-    g.stroke(95, 68, 37, random(4, 15));
-    g.strokeWeight(random(0.2, 0.65));
-    g.line(x, y, x + random(6, 30), y + random(-1.3, 1.3));
-  }
-  g.noStroke();
-  for (let i = 0; i < width * height / 440; i++) {
-    const dark = random() < 0.58;
-    g.fill(dark ? 72 : 255, dark ? random(6, 25) : random(5, 17));
-    g.circle(random(width), random(height), random(0.25, 1.8));
-  }
-  return g;
-}
-
 function windowResized() {
   const old = paint;
   resizeCanvas(windowWidth, windowHeight);
   paint = makeLayer();
-  paper = makePaper();
   paint.image(old, 0, 0);
 }
 
@@ -155,7 +126,7 @@ function draw() {
   }
   active = keep;
 
-  image(paper, 0, 0);
+  clear();
   image(paint, 0, 0);
   for (const s of active) renderStamp(s, window, now);
   drawBrushCursor();
@@ -227,7 +198,7 @@ function placeNode(x, y) {
   claim([x - n.rx, y - n.ry, x + n.rx, y + n.ry]);
   if (prev) connect(prev, n, clock);
   drawNode(n);
-  if (random() < 0.85) label(n);
+  if (random() < 0.12) label(n);
   decorate(n, prev, clock);
   st.nodes.push(n);
   commit(rec);
@@ -448,24 +419,30 @@ function drawSpecks(g, p, q) {
 function drawText(g, p, q) {
   const n = q >= 1 ? p.s.length : ceil(q * p.s.length);
   if (n <= 0) return;
-  g.textFont(FONT);
+  g.textFont(p.arabic ? ARABIC_FONT : FONT);
   g.textSize(p.size);
-  g.textAlign(LEFT, p.va === 'top' ? TOP : p.va === 'bottom' ? BOTTOM : CENTER);
+  const va = p.va === 'top' ? TOP : p.va === 'bottom' ? BOTTOM : CENTER;
+  g.textAlign(p.arabic ? (p.align === 'left' ? LEFT : p.align === 'right' ? RIGHT : CENTER) : LEFT, va);
   const tw = g.textWidth(p.s);
   const x0 = p.align === 'left' ? 0 : p.align === 'center' ? -tw / 2 : -tw;
   g.push();
   g.translate(p.x, p.y);
   if (p.rot) g.rotate(p.rot);
-  const part = p.s.slice(0, n);
+  // Arabic needs its complete character sequence for contextual joining;
+  // reveal it as one correctly shaped RTL inscription rather than breaking
+  // the letterforms into left-to-right fragments.
+  const part = p.arabic ? p.s : p.s.slice(0, n);
+  if (p.arabic) g.drawingContext.direction = 'rtl';
+  const tx = p.arabic ? 0 : x0;
   // ink wicking out from the figures: a fuzzy wide pass, then a crisp one
-  g.fill(0, 0);
-  g.stroke(0, 16);
+  g.fill(pigment(C.ink, 0));
+  g.stroke(pigment(C.ink, 16));
   g.strokeWeight(max(0.8, p.size * 0.22));
-  g.text(part, x0, 0);
-  g.stroke(0, 70);
+  g.text(part, tx, 0);
+  g.stroke(pigment(C.ink, 70));
   g.strokeWeight(max(0.6, p.size * 0.1));
-  g.fill(0, 245);
-  g.text(part, x0, 0);
+  g.fill(pigment(C.ink, 245));
+  g.text(part, tx, 0);
   g.pop();
 }
 
@@ -500,7 +477,11 @@ function pick(a) { return a[floor(random(a.length))]; }
 function snap(v) { const s = u * 0.5; return round(v / s) * s; }
 function wt(k) { return W[k] * sqrt(bs); }
 function fs(m = 0.72) { return max(6.5, u * m * bs * 0.92); }
-function measure(s, size) { textFont(FONT); textSize(size); return textWidth(s); }
+function measure(s, size) {
+  textFont(/[\u0600-\u06FF]/.test(s) ? ARABIC_FONT : FONT);
+  textSize(size);
+  return textWidth(s);
+}
 
 // Every annotation is a random number: a small integer, a two-place decimal
 // or a longer reference number.
@@ -631,22 +612,28 @@ function rrect(x, y, w, h, rad, wgt, dash = null, fill = null, col = C.ink) { in
 // A number that must land clear of everything placed so far: the box is
 // nudged through a few nearby positions and the number is dropped if none
 // is free. Returns the final [x, y] or null.
-function txt(s, x, y, size, align = 'left', va = 'center', rot = 0) {
+function txt(s, x, y, size, align = 'left', va = 'center', rot = 0, preserveSize = false) {
+  const renderSize = resolvedTextSize(s, size, preserveSize);
   const g = u * bs;
   const tries = [[0, 0], [0, -g], [0, g], [g, 0], [-g, 0], [0, -2 * g], [0, 2 * g], [g, -g], [g, g], [-g, -g], [-g, g]];
   for (const [ox, oy] of tries) {
-    const b = textBox(s, x + ox, y + oy, size, align, va, rot);
+    const b = textBox(s, x + ox, y + oy, renderSize, align, va, rot);
     if (!isFree(b)) continue;
     claim(b);
-    txtRaw(s, x + ox, y + oy, size, align, va, rot);
+    txtRaw(s, x + ox, y + oy, renderSize, align, va, rot, true);
     return [x + ox, y + oy];
   }
   return null;
 }
 
 // A number drawn exactly where asked (inside a bubble or marker).
-function txtRaw(s, x, y, size, align = 'left', va = 'center', rot = 0) {
-  rec.push({ k: 'text', s, x, y, size, align, va, rot });
+function txtRaw(s, x, y, size, align = 'left', va = 'center', rot = 0, preserveSize = false) {
+  const arabic = /[\u0600-\u06FF]/.test(s);
+  rec.push({ k: 'text', s, x, y, size: resolvedTextSize(s, size, preserveSize), align, va, rot, arabic });
+}
+
+function resolvedTextSize(s, size, preserveSize) {
+  return /[\u0600-\u06FF]/.test(s) && !preserveSize ? size * ARABIC_NUMERAL_SCALE : size;
 }
 
 // Padded bounding box of a number in page coordinates.
@@ -706,13 +693,28 @@ function bezierPts(x1, y1, cx1, cy1, cx2, cy2, x2, y2, n = 40) {
 // ---------------------------------------------------------------- nodes
 
 function makeNode(x, y, clock) {
-  const kind = weightedPick(clock ? CLOCK_NODES : WATER_NODES);
+  const pool = clock ? CLOCK_NODES : WATER_NODES;
+  const candidates = pool.filter(([name]) => name !== lastGeneratedKind);
+  const kind = weightedPick(candidates.length ? candidates : pool);
+  lastGeneratedKind = kind;
   const n = { x, y, kind, r: u * random(0.8, 1.2) * bs };
-  if (kind === 'waterwheel' || kind === 'clock') n.r = u * random(2.0, 3.1) * bs;
-  else if (kind === 'gear') n.r = u * random(1.25, 2.0) * bs;
-  else if (kind === 'pulley') n.r = u * random(1.0, 1.55) * bs;
+  if (kind === 'waterwheel' || kind === 'clock' || kind === 'astrolabe') n.r = u * random(2.0, 3.1) * bs;
+  else if (kind === 'gear' || kind === 'crownGear') n.r = u * random(1.25, 2.0) * bs;
+  else if (kind === 'gearTrain') { n.rx = u * random(2.5, 3.5) * bs; n.ry = u * random(1.3, 2.0) * bs; }
+  else if (kind === 'pulley' || kind === 'valve') n.r = u * random(1.0, 1.55) * bs;
   else if (kind === 'pump') { n.rx = u * random(2.6, 3.5) * bs; n.ry = u * random(1.4, 2.1) * bs; }
   else if (kind === 'vessel') { n.rx = u * random(1.0, 1.5) * bs; n.ry = u * random(1.7, 2.5) * bs; }
+  else if (kind === 'siphon' || kind === 'fountain' || kind === 'basin') { n.rx = u * random(2.1, 3.1) * bs; n.ry = u * random(1.6, 2.3) * bs; }
+  else if (kind === 'balance') { n.rx = u * random(2.2, 3.2) * bs; n.ry = u * random(1.4, 2.1) * bs; }
+  else if (kind === 'ewer' || kind === 'peacock') { n.rx = u * random(1.6, 2.3) * bs; n.ry = u * random(2.0, 2.8) * bs; }
+  else if (kind === 'elephant') { n.rx = u * random(2.8, 3.8) * bs; n.ry = u * random(1.7, 2.4) * bs; }
+  else if (kind === 'gate') { n.rx = u * random(2.2, 3.2) * bs; n.ry = u * random(2.3, 3.3) * bs; }
+  else if (kind === 'castle') { n.rx = u * random(2.7, 3.7) * bs; n.ry = u * random(2.8, 3.8) * bs; }
+  else if (kind === 'candle' || kind === 'scribe') { n.rx = u * random(1.3, 1.9) * bs; n.ry = u * random(2.3, 3.3) * bs; }
+  else if (kind === 'musicBoat' || kind === 'fluteFountain') { n.rx = u * random(2.7, 3.8) * bs; n.ry = u * random(1.4, 2.1) * bs; }
+  else if (kind === 'lock') { n.rx = u * random(1.8, 2.6) * bs; n.ry = u * random(1.3, 1.9) * bs; }
+  else if (kind === 'chainPump') { n.rx = u * random(1.8, 2.6) * bs; n.ry = u * random(2.4, 3.3) * bs; }
+  else if (kind === 'noria') n.r = u * random(2.0, 2.8) * bs;
   else if (kind === 'automaton') { n.rx = u * 1.6 * bs; n.ry = u * 2.4 * bs; }
   if (n.rx === undefined) { n.rx = n.r; n.ry = n.r; }
   return n;
@@ -723,10 +725,30 @@ function drawNode(n) {
     case 'waterwheel': nodeWaterwheel(n); break;
     case 'clock':      nodeClock(n); break;
     case 'gear':       nodeGear(n); break;
+    case 'crownGear':  nodeCrownGear(n); break;
+    case 'gearTrain':  nodeGearTrain(n); break;
     case 'pulley':     nodePulley(n); break;
     case 'pump':       nodePump(n); break;
     case 'vessel':     nodeVessel(n); break;
     case 'automaton':  nodeAutomaton(n); break;
+    case 'siphon':     nodeSiphon(n); break;
+    case 'fountain':   nodeFountain(n); break;
+    case 'valve':      nodeValve(n); break;
+    case 'astrolabe':  nodeAstrolabe(n); break;
+    case 'balance':    nodeBalance(n); break;
+    case 'ewer':       nodeEwer(n); break;
+    case 'basin':      nodeBasin(n); break;
+    case 'noria':      nodeNoria(n); break;
+    case 'peacock':    nodePeacock(n); break;
+    case 'elephant':   nodeElephant(n); break;
+    case 'gate':       nodeGate(n); break;
+    case 'castle':     nodeCastle(n); break;
+    case 'candle':     nodeCandle(n); break;
+    case 'musicBoat':  nodeMusicBoat(n); break;
+    case 'lock':       nodeLock(n); break;
+    case 'chainPump':  nodeChainPump(n); break;
+    case 'fluteFountain': nodeFluteFountain(n); break;
+    case 'scribe':     nodeScribe(n); break;
   }
 }
 
@@ -751,6 +773,11 @@ function nodeClock(n) {
     const a = i * TWO_PI / 12 - HALF_PI;
     ink([[x + cos(a) * r * 0.77, y + sin(a) * r * 0.77], [x + cos(a) * r * 0.9, y + sin(a) * r * 0.9]], wt('thin'), null, null, C.gold);
   }
+  // Eastern Arabic numerals at the cardinal positions make this read as an
+  // instrument face, without inventing Arabic words or calligraphy.
+  for (const [s, a] of [['١٢', -HALF_PI], ['٣', 0], ['٦', HALF_PI], ['٩', PI]]) {
+    txtRaw(s, x + cos(a) * r * 0.55, y + sin(a) * r * 0.55, fs(0.42), 'center', 'center');
+  }
   const hand = random(TWO_PI);
   ink([[x, y], [x + cos(hand) * r * 0.58, y + sin(hand) * r * 0.58]], wt('reg'), null, null, C.red);
   dotBlot(x, y, r * 0.1);
@@ -767,6 +794,50 @@ function nodeGear(n) {
   ink(pts, wt('reg'), null, PARCHMENT, C.copper);
   circ(x, y, r * 0.48, wt('thin'), null, PARCHMENT, C.copper);
   circ(x, y, r * 0.13, wt('reg'), null, C.gold, C.copper);
+}
+
+// A broader toothed crown with an open hub and alternating radial braces.
+function nodeCrownGear(n) {
+  const { x, y, r } = n, teeth = floor(random(14, 21));
+  const rim = [];
+  for (let i = 0; i <= teeth * 2; i++) {
+    const a = i * PI / teeth;
+    const rr = i % 2 ? r * 0.83 : r * 1.08;
+    rim.push([x + cos(a) * rr, y + sin(a) * rr]);
+  }
+  ink(rim, wt('reg'), null, null, C.ink);
+  circ(x, y, r * 0.58, wt('thin'), null, PARCHMENT, C.ink);
+  circ(x, y, r * 0.17, wt('reg'), null, PARCHMENT, C.ink);
+  for (let i = 0; i < 5; i++) {
+    const a = i * TWO_PI / 5 + PI * 0.1;
+    const tx = -sin(a), ty = cos(a);
+    const px = x + cos(a) * r * 0.78, py = y + sin(a) * r * 0.78;
+    ink([[px - tx * r * 0.15, py - ty * r * 0.15], [px + tx * r * 0.15, py + ty * r * 0.15]], wt('thin'), null, null, C.ink);
+  }
+}
+
+// Two uneven meshing gears with a short shaft: unlike a solitary wheel, this
+// reads as a transmission mechanism rather than a steering-wheel symbol.
+function nodeGearTrain(n) {
+  const { x, y, rx, ry } = n;
+  const a = { x: x - rx * 0.36, y, r: min(rx * 0.42, ry * 0.92) };
+  const b = { x: x + rx * 0.36, y: y + ry * 0.14, r: min(rx * 0.3, ry * 0.66) };
+  gearOutline(a.x, a.y, a.r, 13);
+  gearOutline(b.x, b.y, b.r, 9);
+  circ(a.x, a.y, a.r * 0.17, wt('reg'), null, PARCHMENT, C.ink);
+  circ(b.x, b.y, b.r * 0.2, wt('reg'), null, PARCHMENT, C.ink);
+  ink([[a.x - a.r * 1.25, a.y], [a.x - a.r * 0.2, a.y]], wt('thin'), null, null, C.ink);
+  ink([[b.x + b.r * 0.2, b.y], [b.x + b.r * 1.35, b.y]], wt('thin'), null, null, C.ink);
+}
+
+function gearOutline(x, y, r, teeth) {
+  const pts = [];
+  for (let i = 0; i <= teeth * 2; i++) {
+    const a = i * PI / teeth;
+    const rr = i % 2 ? r * 0.82 : r;
+    pts.push([x + cos(a) * rr, y + sin(a) * rr]);
+  }
+  ink(pts, wt('reg'), null, null, C.ink);
 }
 
 function nodePulley(n) {
@@ -797,6 +868,7 @@ function nodeVessel(n) {
   const level = y + random(-ry * 0.1, ry * 0.45);
   ink([[x - rx * 0.85, level], [x + rx * 0.85, level]], wt('thin'), null, null, C.water);
   for (let i = 0; i < 3; i++) ink([[x - rx * 0.55 + i * rx * 0.5, level], [x - rx * 0.3 + i * rx * 0.5, level + ry * 0.2]], wt('thin'), null, null, C.water);
+  if (random() < 0.7) txtRaw(easternNumber(floor(random(2, 10))), x + rx * 0.15, level - ry * 0.16, fs(0.38), 'left', 'bottom');
 }
 
 function nodeAutomaton(n) {
@@ -805,6 +877,276 @@ function nodeAutomaton(n) {
   ink([[x, y - ry * 0.13], [x, y + ry * 0.7]], wt('reg'), null, null, C.red);
   ink([[x - rx, y + ry * 0.18], [x, y], [x + rx, y + ry * 0.18]], wt('thin'), null, null, C.ink);
   rrect(x - rx * 0.7, y + ry * 0.7, rx * 1.4, ry * 0.38, rx * 0.1, wt('thin'), null, C.gold, C.copper);
+}
+
+// Twin vessels linked by a high, looping conduit: a simplified siphon.
+function nodeSiphon(n) {
+  const { x, y, rx, ry } = n;
+  const lx = x - rx * 0.62, rx2 = x + rx * 0.62, base = y + ry * 0.42;
+  circ(lx, base, ry * 0.48, wt('reg'), null, PARCHMENT, C.ink);
+  circ(rx2, base, ry * 0.48, wt('reg'), null, PARCHMENT, C.ink);
+  ink(bezierPts(lx, base - ry * 0.48, lx, y - ry * 1.15, rx2, y - ry * 1.15, rx2, base - ry * 0.48, 28), wt('reg'), null, null, C.ink);
+  ink([[lx - ry * 0.3, base], [lx + ry * 0.3, base]], wt('thin'), null, null, C.water);
+  ink([[rx2 - ry * 0.3, base], [rx2 + ry * 0.3, base]], wt('thin'), null, null, C.water);
+}
+
+// A low bowl with three water jets and a stepped base.
+function nodeFountain(n) {
+  const { x, y, rx, ry } = n;
+  const bowl = [[x - rx, y + ry * 0.05], [x - rx * 0.72, y + ry * 0.55], [x + rx * 0.72, y + ry * 0.55], [x + rx, y + ry * 0.05]];
+  ink(bowl, wt('reg'), null, null, C.ink);
+  ink([[x - rx * 0.55, y + ry * 0.55], [x - rx * 0.72, y + ry * 0.9], [x + rx * 0.72, y + ry * 0.9], [x + rx * 0.55, y + ry * 0.55]], wt('thin'), null, null, C.ink);
+  for (const off of [-0.45, 0, 0.45]) {
+    const sx = x + off * rx;
+    ink(bezierPts(sx, y + ry * 0.05, sx - off * rx * 0.32, y - ry * 0.95, sx + off * rx * 0.22, y - ry * 0.95, sx + off * rx * 0.12, y + ry * 0.05, 18), wt('thin'), [u * 0.3 * bs, u * 0.2 * bs], null, C.water);
+  }
+}
+
+// A stopcock / valve wheel with a small pipe running through it.
+function nodeValve(n) {
+  const { x, y, r } = n;
+  circ(x, y, r, wt('reg'), null, PARCHMENT, C.ink);
+  circ(x, y, r * 0.32, wt('thin'), null, PARCHMENT, C.ink);
+  for (let i = 0; i < 6; i++) {
+    const a = i * TWO_PI / 6;
+    ink([[x + cos(a) * r * 0.35, y + sin(a) * r * 0.35], [x + cos(a) * r * 1.3, y + sin(a) * r * 1.3]], wt('thin'), null, null, C.ink);
+  }
+  ink([[x - r * 1.8, y], [x + r * 1.8, y]], wt('reg'), null, null, C.copper);
+}
+
+// Concentric, suspended astronomical instrument rather than a modern dial.
+function nodeAstrolabe(n) {
+  const { x, y, r } = n;
+  circ(x, y, r, wt('reg'), null, PARCHMENT, C.ink);
+  circ(x, y, r * 0.74, wt('thin'), null, PARCHMENT, C.ink);
+  circ(x, y, r * 0.25, wt('thin'), null, PARCHMENT, C.ink);
+  const a = random(-PI * 0.8, -PI * 0.2);
+  ink([[x - cos(a) * r * 0.78, y - sin(a) * r * 0.78], [x + cos(a) * r * 0.78, y + sin(a) * r * 0.78]], wt('thin'), null, null, C.gold);
+  for (const [s, a0] of [['٠', -HALF_PI], ['٣', 0], ['٦', HALF_PI], ['٩', PI]]) {
+    txtRaw(s, x + cos(a0) * r * 0.58, y + sin(a0) * r * 0.58, fs(0.34), 'center', 'center');
+  }
+  ink([[x, y - r], [x, y - r * 1.55]], wt('thin'), null, null, C.ink);
+  circ(x, y - r * 1.62, r * 0.18, wt('thin'), null, PARCHMENT, C.ink);
+}
+
+// Beam balance with two suspended pans, a recurrent motif in mechanical diagrams.
+function nodeBalance(n) {
+  const { x, y, rx, ry } = n;
+  const beamY = y - ry * 0.25;
+  ink([[x - rx, beamY], [x + rx, beamY]], wt('reg'), null, null, C.ink);
+  ink([[x, beamY], [x - rx * 0.25, y + ry * 0.72], [x + rx * 0.25, y + ry * 0.72], [x, beamY]], wt('thin'), null, null, C.ink);
+  for (const side of [-1, 1]) {
+    const px = x + side * rx * 0.78, py = y + ry * 0.66;
+    ink([[x + side * rx * 0.78, beamY], [px - side * rx * 0.22, py], [px + side * rx * 0.22, py]], wt('thin'), null, null, C.ink);
+    ink([[px - side * rx * 0.22, py], [px, py + ry * 0.22], [px + side * rx * 0.22, py]], wt('thin'), null, null, C.copper);
+  }
+}
+
+// Pitcher, handle, spout and receiving bowl: a compact hand-washing device.
+function nodeEwer(n) {
+  const { x, y, rx, ry } = n;
+  const body = [[x - rx * 0.7, y - ry * 0.25], [x - rx * 0.5, y + ry * 0.75], [x + rx * 0.5, y + ry * 0.75], [x + rx * 0.72, y - ry * 0.25]];
+  ink(body, wt('reg'), null, null, C.ink);
+  circ(x, y - ry * 0.38, rx * 0.52, wt('thin'), null, PARCHMENT, C.ink);
+  ink(bezierPts(x - rx * 0.5, y, x - rx * 1.35, y - ry * 0.35, x - rx * 1.35, y + ry * 0.55, x - rx * 0.58, y + ry * 0.42, 18), wt('reg'), null, null, C.ink);
+  ink([[x + rx * 0.6, y - ry * 0.12], [x + rx * 1.35, y - ry * 0.55], [x + rx * 1.48, y - ry * 0.3]], wt('reg'), null, null, C.ink);
+  ink([[x + rx * 1.48, y - ry * 0.3], [x + rx * 1.48, y + ry * 0.42]], wt('thin'), [u * 0.22 * bs, u * 0.16 * bs], null, C.water);
+  circ(x + rx * 1.48, y + ry * 0.64, rx * 0.44, wt('thin'), null, PARCHMENT, C.ink);
+}
+
+// A faceted basin with a central spout, two drains and floating indicator drops.
+function nodeBasin(n) {
+  const { x, y, rx, ry } = n;
+  const pts = [];
+  for (let i = 0; i <= 8; i++) {
+    const a = -HALF_PI + i * TWO_PI / 8;
+    pts.push([x + cos(a) * rx, y + sin(a) * ry]);
+  }
+  ink(pts, wt('reg'), null, null, C.ink);
+  circ(x, y, min(rx, ry) * 0.34, wt('thin'), null, PARCHMENT, C.ink);
+  for (const side of [-1, 1]) {
+    ink([[x + side * rx * 0.68, y], [x + side * rx * 1.18, y + ry * 0.22]], wt('thin'), null, null, C.ink);
+    waterDrop(x + side * rx * 1.22, y + ry * 0.32, u * 0.24 * bs);
+  }
+  waterDrop(x, y - ry * 0.62, u * 0.2 * bs);
+}
+
+// A bucketed water wheel, visually distinct from the radial wheel motif.
+function nodeNoria(n) {
+  const { x, y, r } = n;
+  circ(x, y, r, wt('reg'), null, PARCHMENT, C.ink);
+  circ(x, y, r * 0.7, wt('thin'), null, PARCHMENT, C.ink);
+  for (let i = 0; i < 10; i++) {
+    const a = i * TWO_PI / 10;
+    const bx = x + cos(a) * r * 1.05, by = y + sin(a) * r * 1.05;
+    ink([[x, y], [x + cos(a) * r * 0.78, y + sin(a) * r * 0.78]], wt('thin'), null, null, C.ink);
+    rrect(bx - r * 0.12, by - r * 0.16, r * 0.24, r * 0.32, r * 0.04, wt('thin'), null, null, C.ink);
+  }
+  ink([[x - r * 1.6, y + r * 1.25], [x + r * 1.6, y + r * 1.25]], wt('reg'), null, null, C.ink);
+}
+
+// Peacock clock marker: tail fan, bird body, long neck and small beak.
+function nodePeacock(n) {
+  const { x, y, rx, ry } = n;
+  const bx = x - rx * 0.3, by = y + ry * 0.38;
+  circ(bx, by, ry * 0.42, wt('reg'), null, PARCHMENT, C.ink);
+  for (let i = 0; i < 9; i++) {
+    const a = PI + lerp(-HALF_PI * 0.84, HALF_PI * 0.84, i / 8);
+    const ex = bx + cos(a) * rx * 1.3, ey = by + sin(a) * ry * 1.1;
+    ink([[bx - rx * 0.15, by], [ex, ey]], wt('thin'), null, null, C.ink);
+    circ(ex, ey, ry * 0.1, wt('thin'), null, PARCHMENT, C.ink);
+  }
+  ink(bezierPts(bx + rx * 0.2, by - ry * 0.2, bx + rx * 0.45, y - ry * 0.55, x + rx * 0.35, y - ry * 0.9, x + rx * 0.6, y - ry * 1.02, 20), wt('reg'), null, null, C.ink);
+  circ(x + rx * 0.66, y - ry * 1.02, ry * 0.16, wt('thin'), null, PARCHMENT, C.ink);
+  ink([[x + rx * 0.8, y - ry * 1.02], [x + rx, y - ry * 0.94]], wt('thin'), null, null, C.ink);
+}
+
+// Elephant-clock silhouette with a clock tower, hanging ball and water channel.
+function nodeElephant(n) {
+  const { x, y, rx, ry } = n;
+  rrect(x - rx, y - ry * 0.1, rx * 1.6, ry * 0.9, ry * 0.28, wt('reg'), null, null, C.ink);
+  circ(x + rx * 0.9, y + ry * 0.16, ry * 0.38, wt('reg'), null, PARCHMENT, C.ink);
+  ink(bezierPts(x + rx * 1.12, y + ry * 0.28, x + rx * 1.55, y + ry * 0.45, x + rx * 1.42, y + ry * 0.92, x + rx * 1.18, y + ry * 0.96, 18), wt('reg'), null, null, C.ink);
+  for (const side of [-0.62, -0.1, 0.42]) ink([[x + side * rx, y + ry * 0.72], [x + side * rx, y + ry * 1.15]], wt('reg'), null, null, C.ink);
+  rrect(x - rx * 0.25, y - ry * 1.25, rx * 0.75, ry * 1.15, ry * 0.12, wt('thin'), null, null, C.ink);
+  circ(x + rx * 0.12, y - ry * 0.72, ry * 0.28, wt('thin'), null, PARCHMENT, C.ink);
+  ink([[x + rx * 0.48, y - ry * 1.12], [x + rx * 0.48, y - ry * 1.72]], wt('thin'), null, null, C.ink);
+  circ(x + rx * 0.48, y - ry * 1.84, ry * 0.13, wt('thin'), null, PARCHMENT, C.ink);
+  waterArc(x - rx * 0.45, y + ry * 0.86, ry * 0.46, -1);
+}
+
+// Palace-gate clock: arch, two side posts and a falling-ball indicator.
+function nodeGate(n) {
+  const { x, y, rx, ry } = n;
+  const left = x - rx, right = x + rx, base = y + ry;
+  ink([[left, base], [left, y - ry * 0.18]], wt('reg'), null, null, C.ink);
+  ink(bezierPts(left, y - ry * 0.18, left, y - ry * 1.2, right, y - ry * 1.2, right, y - ry * 0.18, 28), wt('reg'), null, null, C.ink);
+  ink([[right, y - ry * 0.18], [right, base]], wt('reg'), null, null, C.ink);
+  for (const side of [-1, 1]) {
+    circ(x + side * rx * 0.64, y + ry * 0.12, ry * 0.22, wt('thin'), null, PARCHMENT, C.ink);
+    ink([[x + side * rx * 0.64, y + ry * 0.35], [x + side * rx * 0.64, base]], wt('thin'), null, null, C.ink);
+  }
+  circ(x, y - ry * 0.35, ry * 0.19, wt('thin'), null, PARCHMENT, C.ink);
+  ink([[x, y - ry * 0.54], [x, y - ry * 1.08]], wt('thin'), null, null, C.ink);
+  starMark(x, y - ry * 1.25, ry * 0.22);
+}
+
+// Architectural water clock: time doors, a moving moon track and falcon balls.
+function nodeCastle(n) {
+  const { x, y, rx, ry } = n;
+  rrect(x - rx, y - ry * 0.32, rx * 2, ry * 1.42, ry * 0.1, wt('reg'), null, null, C.ink);
+  for (let i = 0; i < 5; i++) {
+    const px = x - rx * 0.68 + i * rx * 0.34;
+    rrect(px - rx * 0.1, y + ry * 0.13, rx * 0.2, ry * 0.34, ry * 0.04, wt('thin'), null, null, C.ink);
+  }
+  for (const side of [-1, 1]) {
+    rrect(x + side * rx * 0.77 - rx * 0.14, y - ry * 1.02, rx * 0.28, ry * 0.72, ry * 0.04, wt('thin'), null, null, C.ink);
+    ink([[x + side * rx * 0.86, y - ry * 1.02], [x + side * rx * 1.1, y - ry * 0.74], [x + side * rx * 0.84, y - ry * 0.62]], wt('thin'), null, null, C.ink);
+    circ(x + side * rx * 1.13, y - ry * 0.58, ry * 0.1, wt('thin'), null, PARCHMENT, C.ink);
+  }
+  ink(bezierPts(x - rx * 0.6, y - ry * 0.42, x - rx * 0.2, y - ry * 1.42, x + rx * 0.2, y - ry * 1.42, x + rx * 0.6, y - ry * 0.42, 22), wt('reg'), null, null, C.ink);
+  circ(x, y - ry * 0.84, ry * 0.22, wt('thin'), null, PARCHMENT, C.ink);
+  crescentMark(x + rx * 0.32, y - ry * 0.95, ry * 0.18);
+}
+
+// A calibrated candle clock with wax graduations, a pointer and a small flame.
+function nodeCandle(n) {
+  const { x, y, rx, ry } = n;
+  rrect(x - rx * 0.32, y - ry, rx * 0.64, ry * 1.7, rx * 0.1, wt('reg'), null, null, C.ink);
+  for (let i = 1; i < 7; i++) {
+    const py = y - ry + i * ry * 0.24;
+    ink([[x - rx * 0.32, py], [x - rx * (i % 2 ? 0.02 : 0.13), py]], wt('thin'), null, null, C.ink);
+    if (i % 2 === 0) txtRaw(easternNumber(i), x + rx * 0.48, py, fs(0.3), 'left', 'center');
+  }
+  ink([[x, y - ry], [x, y - ry * 1.35]], wt('thin'), null, null, C.ink);
+  waterDrop(x, y - ry * 1.52, rx * 0.24);
+  ink([[x - rx * 0.72, y - ry * 0.14], [x + rx * 0.72, y - ry * 0.14]], wt('thin'), null, null, C.ink);
+  ink([[x + rx * 0.72, y - ry * 0.14], [x + rx * 1.05, y - ry * 0.42]], wt('thin'), null, null, C.ink);
+}
+
+// A floating hull carrying four abstract drum stations and patterned waves.
+function nodeMusicBoat(n) {
+  const { x, y, rx, ry } = n;
+  ink([[x - rx, y], [x - rx * 0.68, y + ry * 0.7], [x + rx * 0.68, y + ry * 0.7], [x + rx, y]], wt('reg'), null, null, C.ink);
+  ink([[x - rx * 0.72, y], [x + rx * 0.72, y]], wt('thin'), null, null, C.ink);
+  for (let i = 0; i < 4; i++) {
+    const px = x - rx * 0.54 + i * rx * 0.36;
+    circ(px, y - ry * 0.22, ry * 0.25, wt('thin'), null, PARCHMENT, C.ink);
+    ink([[px - ry * 0.26, y - ry * 0.47], [px + ry * 0.18, y - ry * 0.12]], wt('thin'), null, null, C.ink);
+  }
+  for (let i = 0; i < 3; i++) waterArc(x - rx * 0.45 + i * rx * 0.46, y + ry * 0.95, ry * 0.34, i % 2 ? -1 : 1);
+}
+
+// Four-bolt / combination-lock silhouette with numbered tumblers.
+function nodeLock(n) {
+  const { x, y, rx, ry } = n;
+  rrect(x - rx, y - ry * 0.25, rx * 2, ry * 1.25, ry * 0.15, wt('reg'), null, null, C.ink);
+  ink(bezierPts(x - rx * 0.52, y - ry * 0.25, x - rx * 0.7, y - ry * 1.25, x + rx * 0.7, y - ry * 1.25, x + rx * 0.52, y - ry * 0.25, 20), wt('reg'), null, null, C.ink);
+  for (let i = 0; i < 4; i++) {
+    const px = x - rx * 0.55 + i * rx * 0.37;
+    circ(px, y + ry * 0.34, ry * 0.2, wt('thin'), null, PARCHMENT, C.ink);
+    txtRaw(easternNumber(floor(random(0, 10))), px, y + ry * 0.34, fs(0.27), 'center', 'center');
+    ink([[px, y + ry * 0.6], [px, y + ry * 0.93]], wt('thin'), null, null, C.ink);
+  }
+}
+
+// Endless chain of pots moving between upper and lower wheels.
+function nodeChainPump(n) {
+  const { x, y, rx, ry } = n;
+  const top = y - ry * 0.62, bottom = y + ry * 0.62;
+  circ(x, top, rx * 0.52, wt('reg'), null, PARCHMENT, C.ink);
+  circ(x, bottom, rx * 0.52, wt('reg'), null, PARCHMENT, C.ink);
+  for (const side of [-1, 1]) {
+    ink([[x + side * rx * 0.52, top], [x + side * rx * 0.52, bottom]], wt('thin'), [u * 0.18 * bs, u * 0.14 * bs], null, C.ink);
+    for (let i = 0; i < 4; i++) {
+      const py = lerp(top + ry * 0.24, bottom - ry * 0.24, i / 3);
+      rrect(x + side * rx * 0.52 - rx * 0.1, py - ry * 0.1, rx * 0.2, ry * 0.2, rx * 0.03, wt('thin'), null, null, C.ink);
+    }
+  }
+  ink([[x + rx * 0.75, top - ry * 0.18], [x + rx * 1.35, top - ry * 0.18], [x + rx * 1.35, top - ry * 0.66]], wt('thin'), null, null, C.water);
+}
+
+// Fountain bank with pipes of unequal length: a small musical-water device.
+function nodeFluteFountain(n) {
+  const { x, y, rx, ry } = n;
+  ink([[x - rx, y + ry * 0.72], [x + rx, y + ry * 0.72]], wt('reg'), null, null, C.ink);
+  for (let i = 0; i < 5; i++) {
+    const px = x - rx * 0.64 + i * rx * 0.32;
+    const h = ry * (0.55 + (i % 3) * 0.22);
+    rrect(px - rx * 0.07, y + ry * 0.72 - h, rx * 0.14, h, rx * 0.03, wt('thin'), null, null, C.ink);
+    waterDrop(px, y + ry * 0.72 - h - ry * 0.18, rx * 0.08);
+  }
+  ink([[x - rx * 1.1, y + ry * 0.72], [x - rx, y + ry * 0.72]], wt('thin'), null, null, C.water);
+}
+
+// Portable scribe-clock marker: seated figure, tablet and time-indicating pen.
+function nodeScribe(n) {
+  const { x, y, rx, ry } = n;
+  circ(x - rx * 0.2, y - ry * 0.68, rx * 0.28, wt('thin'), null, PARCHMENT, C.ink);
+  ink([[x - rx * 0.2, y - ry * 0.4], [x - rx * 0.5, y + ry * 0.35], [x + rx * 0.3, y + ry * 0.35]], wt('reg'), null, null, C.ink);
+  rrect(x - rx * 0.12, y - ry * 0.08, rx * 0.95, ry * 0.42, rx * 0.05, wt('thin'), null, null, C.ink);
+  ink([[x - rx * 0.12, y + ry * 0.04], [x + rx * 0.86, y + ry * 0.22]], wt('thin'), null, null, C.ink);
+  ink([[x + rx * 0.5, y + ry * 0.1], [x + rx * 1.05, y - ry * 0.42]], wt('thin'), null, null, C.ink);
+  circ(x + rx * 1.08, y - ry * 0.46, rx * 0.08, wt('thin'), null, PARCHMENT, C.ink);
+}
+
+function waterDrop(x, y, r) {
+  ink([[x, y - r * 1.4], [x + r, y + r * 0.2], [x, y + r], [x - r, y + r * 0.2], [x, y - r * 1.4]], wt('thin'), null, null, C.water);
+}
+
+function crescentMark(x, y, r) {
+  ink(bezierPts(x - r * 0.58, y - r, x + r * 0.85, y - r * 0.8, x + r * 0.85, y + r * 0.8, x - r * 0.58, y + r, 18), wt('thin'), null, null, C.ink);
+  ink(bezierPts(x - r * 0.58, y + r, x + r * 0.08, y + r * 0.45, x + r * 0.08, y - r * 0.45, x - r * 0.58, y - r, 18), wt('thin'), null, null, C.ink);
+}
+
+function starMark(x, y, r) {
+  const pts = [];
+  for (let i = 0; i <= 8; i++) {
+    const a = -HALF_PI + i * TWO_PI / 8;
+    const rr = i % 2 ? r * 0.42 : r;
+    pts.push([x + cos(a) * rr, y + sin(a) * rr]);
+  }
+  ink(pts, wt('thin'), null, null, C.ink);
 }
 
 function waterArc(x, y, r, dir) {
@@ -996,19 +1338,55 @@ function label(n) {
 // ---------------------------------------------------------------- decorations
 
 function decorate(n, prev, clock) {
-  if (random() < 0.42) rosette(n.x + random(-n.rx, n.rx), n.y + random(-n.ry, n.ry), u * random(0.28, 0.6) * bs);
+  if (random() < 0.08) rosette(n.x + random(-n.rx, n.rx), n.y + random(-n.ry, n.ry), u * random(0.28, 0.6) * bs);
   if (!clock && random() < 0.35) flowMarks(n);
   if (clock && random() < 0.3) celestialArc(n);
   if (prev && random() < 0.2) hangingWeight(n);
+  if (random() < 0.58) measurementNotation(n, clock);
+  if (random() < 0.12) technicalLabel(n);
+}
+
+function easternNumber(value) {
+  return String(value).replace(/\d/g, d => EASTERN_DIGITS[Number(d)]);
+}
+
+// A compact non-verbal technical annotation: a ticked rule plus Eastern
+// Arabic numerals. `txt` retains the collision avoidance used by the brush.
+function measurementNotation(n, clock) {
+  const horizontal = random() < 0.5;
+  const len = u * random(1.6, 3.2) * bs;
+  const x = n.x + random(-n.rx * 1.25, n.rx * 1.25);
+  const y = n.y + random(-n.ry * 1.2, n.ry * 1.2);
+  const dx = horizontal ? len : 0, dy = horizontal ? 0 : len;
+  ink([[x, y], [x + dx, y + dy]], wt('thin'), null, null, C.ink);
+  for (let i = 0; i <= 3; i++) {
+    const q = i / 3;
+    const px = x + dx * q, py = y + dy * q;
+    const t = u * 0.13 * bs * (i === 0 || i === 3 ? 1.5 : 1);
+    ink(horizontal ? [[px, py - t], [px, py + t]] : [[px - t, py], [px + t, py]], wt('thin'), null, null, C.ink);
+  }
+  const value = easternNumber(floor(random(clock ? 1 : 2, clock ? 25 : 90)));
+  txt(value, x + (horizontal ? len * 0.5 : u * 0.28 * bs), y + (horizontal ? -u * 0.24 * bs : len * 0.5), fs(0.4), horizontal ? 'center' : 'left', horizontal ? 'bottom' : 'center');
+}
+
+// A rare, source-appropriate Arabic noun tag. It is deliberately sparse,
+// legible and attached to the mechanism rather than used as surface ornament.
+function technicalLabel(n) {
+  const term = pick(CEZERI_LABELS);
+  const side = random() < 0.5 ? -1 : 1;
+  const x = n.x + side * (n.rx + u * 0.72 * bs);
+  const y = n.y + random(-n.ry * 0.58, n.ry * 0.58);
+  const end = x - side * u * 0.25 * bs;
+  ink([[n.x + side * n.rx * 0.7, n.y], [end, y]], wt('thin'), null, null, C.ink);
+  // The label's size is already deliberate. Preserve it, while numerals
+  // elsewhere receive the global two-times native render size.
+  txt(term.ar, x, y, fs(1.8), side > 0 ? 'left' : 'right', 'center', 0, true);
 }
 
 function rosette(x, y, r) {
-  circ(x, y, r, wt('thin'), null, PARCHMENT, C.gold);
-  for (let i = 0; i < 8; i++) {
-    const a = i * TWO_PI / 8;
-    ink([[x, y], [x + cos(a) * r * 1.45, y + sin(a) * r * 1.45]], wt('thin'), null, null, C.gold);
-  }
-  circ(x, y, r * 0.2, wt('thin'), null, C.red, C.gold);
+  // A small lozenge seal, deliberately not the recurring radial wheel mark.
+  ink([[x, y - r], [x + r * 0.72, y], [x, y + r], [x - r * 0.72, y], [x, y - r]], wt('thin'), null, null, C.ink);
+  ink([[x - r * 0.45, y], [x + r * 0.45, y]], wt('thin'), null, null, C.ink);
 }
 
 function flowMarks(n) {
@@ -1261,6 +1639,7 @@ function clearAll() {
   paint.clear();
   active = [];
   boxes = [];
+  lastGeneratedKind = null;
 }
 
 function keyPressed() {

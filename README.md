@@ -7,7 +7,7 @@ menu in the top-left corner, or open `index.html?brush=<name>` directly.
 | Brush | Folder | What it draws |
 | --- | --- | --- |
 | Score Brush | [`brushes/score/`](brushes/score/README.md) | ribbons of staff lines with animated graphic-score snippets in five colours |
-| Cezeri Mechanisms | [`brushes/schematic/`](brushes/schematic/README.md) | animated water machines, clocks, gears and vessels in a parchment-and-pigment visual language inspired by al-Jazari |
+| Cezeri Mechanisms | [`brushes/schematic/`](brushes/schematic/README.md) | transparent animated water machines, clocks, gears and vessels in an ink-first visual language inspired by al-Jazari |
 | Balloon Brush | [`brushes/balloon/`](brushes/balloon/README.md) | a hidden poster of perfectly fitting airbrushed blobs in five spot colours, revealed blob by blob along each line you draw |
 
 Each brush's own README lists its keys. `?auto` on any brush starts with a
